@@ -23,6 +23,7 @@ package fr.pilato.elasticsearch.crawler.fs.client;
 import com.jayway.jsonpath.DocumentContext;
 import com.jayway.jsonpath.PathNotFoundException;
 import fr.pilato.elasticsearch.crawler.fs.beans.Doc;
+import fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil;
 import fr.pilato.elasticsearch.crawler.fs.framework.Version;
 import fr.pilato.elasticsearch.crawler.fs.framework.bulk.FsCrawlerBulkProcessor;
 import fr.pilato.elasticsearch.crawler.fs.framework.bulk.FsCrawlerRetryBulkProcessorListener;
@@ -35,6 +36,7 @@ import jakarta.ws.rs.client.ClientBuilder;
 import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.client.Invocation;
 import jakarta.ws.rs.client.WebTarget;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.apache.logging.log4j.LogManager;
@@ -44,36 +46,37 @@ import org.glassfish.jersey.client.ClientProperties;
 import org.glassfish.jersey.client.authentication.HttpAuthenticationFeature;
 import org.glassfish.jersey.logging.LoggingFeature;
 
-import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
-import java.io.IOException;
+import javax.net.ssl.*;
+import java.io.*;
 import java.net.ConnectException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.security.KeyManagementException;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
+import java.security.*;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
+import java.util.stream.StreamSupport;
 
 import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.*;
-import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.*;
+import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.parseJsonAsDocumentContext;
+import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.serialize;
 
 /**
  * Elasticsearch Client for Clusters running v7.
  */
 public class ElasticsearchClient implements IElasticsearchClient {
 
-    private static final Logger logger = LogManager.getLogger(ElasticsearchClient.class);
+    private static final Logger logger = LogManager.getLogger();
+    @Deprecated
     private final Path config;
     private final FsSettings settings;
     private static final String USER_AGENT = "FSCrawler-Rest-Client-" + Version.getVersion();
@@ -87,9 +90,14 @@ public class ElasticsearchClient implements IElasticsearchClient {
     private final List<String> initialHosts;
 
     private String version = null;
+    private String license = null;
     private int majorVersion;
+    private int minorVersion;
     private int currentNode = -1;
     private int currentRun = -1;
+    private String authorizationHeader = null;
+    private boolean semanticSearch;
+    private boolean vectorSearch = false;
 
     public ElasticsearchClient(Path config, FsSettings settings) {
         this.config = config;
@@ -104,6 +112,7 @@ public class ElasticsearchClient implements IElasticsearchClient {
             // We have only one node, so we won't have to select a specific one but the only one.
             currentNode = 0;
         }
+        semanticSearch = settings.getElasticsearch().isSemanticSearch();
     }
 
     @Override
@@ -113,63 +122,30 @@ public class ElasticsearchClient implements IElasticsearchClient {
             return;
         }
 
-            /*
-        if (settings.getPathPrefix() != null) {
-            builder.setPathPrefix(settings.getPathPrefix());
-        }
-
-        if (settings.getUsername() != null) {
-            if (settings.getSslVerification()) {
-                builder.setHttpClientConfigCallback(httpClientBuilder -> httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider));
-            } else {
-                builder.setHttpClientConfigCallback(httpClientBuilder -> {
-                    SSLContext sc;
-                    try {
-                        sc = SSLContext.getInstance("SSL");
-                        sc.init(null, trustAllCerts, new SecureRandom());
-                    } catch (KeyManagementException | NoSuchAlgorithmException e) {
-                        logger.warn("Failed to get SSL Context", e);
-                        throw new RuntimeException(e);
-                    }
-                    httpClientBuilder.setSSLStrategy(new SSLIOSessionStrategy(sc, new NullHostNameVerifier()));
-                    httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider);
-                    return httpClientBuilder;
-                });
-            }
-        }
-
-        return builder;
-    }
-    */
-
         // Create the client
         ClientConfig config = new ClientConfig();
         // We need to suppress this, so we can do DELETE with body
         config.property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true);
-        HttpAuthenticationFeature feature = HttpAuthenticationFeature.basic(
-                settings.getElasticsearch().getUsername(),
-                settings.getElasticsearch().getPassword());
+
+        ClientBuilder clientBuilder = ClientBuilder.newBuilder()
+                .hostnameVerifier(new NullHostNameVerifier())
+                .withConfig(config);
+
         SSLContext sslContext = null;
-        if (settings.getElasticsearch().getSslVerification()) {
-            // TODO implement this part and add elasticsearch ssl settings
-            // If we have a truststore and a keystore, let's use it
-            /*
-            SslConfigurator sslConfig = SslConfigurator.newInstance()
-                    .trustStoreFile("./truststore_client")
-                    .trustStorePassword("secret-password-for-truststore")
-                    .keyStoreFile("./keystore_client")
-                    .keyPassword("secret-password-for-keystore");
-            sslContext = sslConfig.createSSLContext();
-            */
+        if (settings.getElasticsearch().isSslVerification()) {
+            String caCertificatePath = settings.getElasticsearch().getCaCertificate();
+            if (caCertificatePath != null) {
+                File certFile = new File(caCertificatePath);
+                sslContext = sslContextFromHttpCaCrt(certFile);
+                logger.debug("Using provided CA Certificate from [{}]", caCertificatePath);
+                clientBuilder.sslContext(sslContext);
+            }
         } else {
             // Trusting all certificates. For test purposes only.
             try {
                 sslContext = SSLContext.getInstance("SSL");
                 sslContext.init(null, trustAllCerts, new SecureRandom());
-
-                HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.getSocketFactory());
-                HttpsURLConnection.setDefaultHostnameVerifier(new NullHostNameVerifier());
-
+                clientBuilder.sslContext(sslContext);
                 logger.warn("We are not doing SSL verification. It's not recommended for production.");
             } catch (KeyManagementException | NoSuchAlgorithmException e) {
                 logger.warn("Failed to get SSL Context", e);
@@ -177,13 +153,19 @@ public class ElasticsearchClient implements IElasticsearchClient {
             }
         }
 
-        ClientBuilder clientBuilder = ClientBuilder.newBuilder()
-                .withConfig(config)
-                .register(feature);
+        // If we have an Api Key let's use it. Otherwise, we will use basic auth
+        if (!FsCrawlerUtil.isNullOrEmpty(settings.getElasticsearch().getApiKey())) {
+            authorizationHeader = "ApiKey " + settings.getElasticsearch().getApiKey();
+        } else {
+            HttpAuthenticationFeature feature = HttpAuthenticationFeature.basic(
+                    settings.getElasticsearch().getUsername(),
+                    settings.getElasticsearch().getPassword());
+            clientBuilder.register(feature);
+        }
         if (sslContext != null) {
             clientBuilder.sslContext(sslContext);
         }
-        client =  clientBuilder.build();
+        client = clientBuilder.build();
         if (logger.isTraceEnabled()) {
             client
 //                    .property(LoggingFeature.LOGGING_FEATURE_LOGGER_NAME_CLIENT, ElasticsearchClient.class.getName())
@@ -210,6 +192,29 @@ public class ElasticsearchClient implements IElasticsearchClient {
             }
         }
 
+        if (semanticSearch) {
+            // Check the version we are running
+            if (majorVersion >= 8 && minorVersion >= 17) {
+                logger.debug("Semantic search is enabled and we are running on a version of Elasticsearch {} " +
+                        "which is 8.17 or higher. We will try to use the semantic search features.", version);
+                license = getLicense();
+                if (!"enterprise".equals(license) && !"trial".equals(license)) {
+                    logger.warn("Semantic search is enabled but we are running Elasticsearch with a {} " +
+                            "license although we need either an enterprise or trial license." +
+                            "We will not be able to use the semantic search features ATM. We might switch later to " +
+                            "a vector embeddings generation.", license);
+                    semanticSearch = false;
+                    vectorSearch = true;
+                } else {
+                    logger.debug("Semantic search is enabled");
+                }
+            } else {
+                logger.warn("Semantic search is enabled but we are running on a version of Elasticsearch {} " +
+                        "which is lower than 8.17. We will not be able to use the semantic search features.", version);
+                semanticSearch = false;
+            }
+        }
+
         // Create the BulkProcessor instance
         bulkProcessor = new FsCrawlerBulkProcessor.Builder<>(
                 new ElasticsearchEngine(this),
@@ -217,7 +222,28 @@ public class ElasticsearchClient implements IElasticsearchClient {
                 ElasticsearchBulkRequest::new)
                 .setBulkActions(settings.getElasticsearch().getBulkSize())
                 .setFlushInterval(settings.getElasticsearch().getFlushInterval())
+                .setByteSize(settings.getElasticsearch().getByteSize())
                 .build();
+    }
+
+    private static SSLContext sslContextFromHttpCaCrt(File file) {
+        try(InputStream in = new FileInputStream(file)) {
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            Certificate certificate = cf.generateCertificate(in);
+
+            final KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+            keyStore.load(null, null);
+            keyStore.setCertificateEntry("elasticsearch-ca", certificate);
+
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(keyStore);
+
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, tmf.getTrustManagers(), null);
+            return sslContext;
+        } catch (CertificateException | NoSuchAlgorithmException | KeyManagementException | KeyStoreException | IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public List<String> getAvailableNodes() {
@@ -236,9 +262,51 @@ public class ElasticsearchClient implements IElasticsearchClient {
         // Cache the version and the major version
         version = document.read("$.version.number");
         majorVersion = extractMajorVersion(version);
+        minorVersion = extractMinorVersion(version);
 
         logger.debug("get version returns {} and {} as the major version number", version, majorVersion);
         return version;
+    }
+
+    @Override
+    public String getLicense() throws ElasticsearchClientException {
+        if (license != null) {
+            return license;
+        }
+
+        // License endpoint might not be ready in IT so we retry with exponential wait time up to 1 minute
+        int retries = 0;
+        int maxRetries = 5;
+        int waitTime = 1000;
+        while (retries < maxRetries) {
+            try {
+                return getLicenseInternal();
+            } catch (NotFoundException e) {
+                logger.warn("License endpoint is not ready yet. Retrying in {}ms", waitTime);
+                try {
+                    Thread.sleep(waitTime);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+                waitTime *= 2;
+                retries++;
+            }
+        }
+
+        throw new ElasticsearchClientException("License endpoint is not ready after " + maxRetries + " retries");
+    }
+
+    private String getLicenseInternal() throws ElasticsearchClientException {
+        logger.debug("get license");
+        String response = httpGet("_license");
+
+        // We parse the response
+        DocumentContext document = parseJsonAsDocumentContext(response);
+        // Cache the license level
+        license = document.read("$.license.type");
+
+        logger.debug("get license returns {}", license);
+        return license;
     }
 
     @Override
@@ -253,6 +321,7 @@ public class ElasticsearchClient implements IElasticsearchClient {
      * @param indexSettings index settings if any
      */
     @Override
+    @Deprecated
     public void createIndex(String index, boolean ignoreExistingIndex, String indexSettings) throws ElasticsearchClientException {
         String realIndexSettings = indexSettings;
         logger.debug("create index [{}]", index);
@@ -284,6 +353,30 @@ public class ElasticsearchClient implements IElasticsearchClient {
             } else {
                 throw new ElasticsearchClientException("Error while creating index " + index, e);
             }
+        }
+    }
+
+    @Override
+    public void pushComponentTemplate(String name, String json) throws ElasticsearchClientException {
+        logger.debug("push component template [{}]", name);
+        String url = "_component_template/" + name;
+        logger.trace("component template: [{}]", json);
+        try {
+            httpPut(url, json);
+        } catch (WebApplicationException e) {
+            throw new ElasticsearchClientException("Error while creating component template " + name, e);
+        }
+    }
+
+    @Override
+    public void pushIndexTemplate(String name, String json) throws ElasticsearchClientException {
+        logger.debug("push index template [{}]", name);
+        String url = "_index_template/" + name;
+        logger.trace("index template: [{}]", json);
+        try {
+            httpPut(url, json);
+        } catch (WebApplicationException e) {
+            throw new ElasticsearchClientException("Error while creating index template " + name, e);
         }
     }
 
@@ -427,8 +520,13 @@ public class ElasticsearchClient implements IElasticsearchClient {
         }
     }
 
-    @Override
-    public void createIndices() throws Exception {
+    /**
+     * Creates needed indices. This is only called for ES < 7 cluster.
+     * @deprecated only used with ES < 7
+     * @throws Exception in case of error
+     */
+    @Deprecated
+    private void createIndices() throws Exception {
         Path jobMappingDir = config.resolve(settings.getName()).resolve("_mappings");
 
         // If needed, we create the new settings for this files index
@@ -443,6 +541,79 @@ public class ElasticsearchClient implements IElasticsearchClient {
             createIndex(jobMappingDir, majorVersion, INDEX_SETTINGS_FOLDER_FILE, settings.getElasticsearch().getIndexFolder());
         } else {
             createIndex(settings.getElasticsearch().getIndexFolder(), true, null);
+        }
+    }
+
+    @Override
+    public void createIndexAndComponentTemplates() throws Exception {
+        if (majorVersion < 7) {
+            logger.warn("We are running on a version of Elasticsearch {} which is lower than 7.0. " +
+                    "We will not create index templates nor component templates.", version);
+            logger.warn("Instead we will create indices based on files on disk (Deprecated).");
+            createIndices();
+            return;
+        }
+
+        if (settings.getElasticsearch().isPushTemplates()) {
+            logger.debug("Creating/updating component templates");
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_alias");
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_settings_shards");
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_settings_total_fields");
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_mapping_attributes");
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_mapping_file");
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_mapping_path");
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_mapping_attachment");
+            if (semanticSearch) {
+                loadAndPushComponentTemplate(majorVersion, "fscrawler_mapping_content_semantic");
+            } else {
+                loadAndPushComponentTemplate(majorVersion, "fscrawler_mapping_content");
+            }
+            loadAndPushComponentTemplate(majorVersion, "fscrawler_mapping_meta");
+
+            logger.debug("Creating/updating index templates");
+            // If needed, we create the new settings for this files index
+            if (!settings.getFs().isAddAsInnerObject() || (!settings.getFs().isJsonSupport() && !settings.getFs().isXmlSupport())) {
+                if (semanticSearch) {
+                    loadAndPushIndexTemplate(majorVersion, "fscrawler_docs_semantic", settings.getElasticsearch().getIndex());
+                } else {
+                    loadAndPushIndexTemplate(majorVersion, "fscrawler_docs", settings.getElasticsearch().getIndex());
+                }
+            }
+
+            // If needed, we create the new settings for this folder index
+            if (settings.getFs().isIndexFolders()) {
+                loadAndPushIndexTemplate(majorVersion, "fscrawler_folders", settings.getElasticsearch().getIndexFolder());
+            }
+        }
+    }
+
+    private void loadAndPushComponentTemplate(int version, String name) throws IOException, ElasticsearchClientException {
+        logger.trace("Loading component template [{}]", name);
+        String json = loadResourceFile(version + "/_component_templates/" + name + ".json");
+        pushComponentTemplate(name, json);
+    }
+
+    private void loadAndPushIndexTemplate(int version, String name, String index) throws IOException, ElasticsearchClientException {
+        logger.trace("Loading index template [{}]", name);
+        String json = loadResourceFile(version + "/_index_templates/" + name + ".json");
+
+        // We need to replace the placeholder values
+        json = json.replaceAll("INDEX_NAME", index);
+
+        pushIndexTemplate(name + "_" + index, json);
+    }
+
+    /**
+     * Reads a resource file from the classpath or from a JAR.
+     * @param source The target
+     * @return The content of the file
+     */
+    private static String loadResourceFile(String source) throws IOException {
+        try (BufferedReader buffer = new BufferedReader(new InputStreamReader(
+                ElasticsearchClient.class.getResourceAsStream(source)))) {
+            return StreamSupport.stream(buffer.lines().spliterator(), false)
+                    .reduce((a, b) -> a + "\n" + b)
+                    .orElse(null);
         }
     }
 
@@ -464,76 +635,75 @@ public class ElasticsearchClient implements IElasticsearchClient {
         int size = 10;
         if (request.getSize() != null) {
             size = request.getSize();
-            body.getAndUpdate(s -> s += "\"size\":" + request.getSize());
+            body.getAndUpdate(s -> s + ("\"size\":" + request.getSize()));
             bodyEmpty = false;
         }
         if (!request.getStoredFields().isEmpty()) {
             if (!bodyEmpty) {
-                body.getAndUpdate(s -> s += ",");
+                body.getAndUpdate(s -> s + ",");
             }
-            body.getAndUpdate(s -> s += "\"stored_fields\" : [");
+            body.getAndUpdate(s -> s + "\"stored_fields\" : [");
 
             AtomicBoolean moreFields = new AtomicBoolean(false);
             request.getStoredFields().forEach(f -> {
                 if (moreFields.getAndSet(true)) {
-                    body.getAndUpdate(s -> s += ",");
+                    body.getAndUpdate(s -> s + ",");
                 }
-                body.getAndUpdate(s -> s += "\"" + f + "\"");
+                body.getAndUpdate(s -> s + ("\"" + f + "\""));
             });
-            body.getAndUpdate(s -> s += "]");
+            body.getAndUpdate(s -> s + "]");
             bodyEmpty = false;
         }
         if (request.getESQuery() != null) {
             if (!bodyEmpty) {
-                body.getAndUpdate(s -> s += ",");
+                body.getAndUpdate(s -> s + ",");
             }
-            body.getAndUpdate(s -> s += "\"query\" : {" + toElasticsearchQuery(request.getESQuery()) + "}");
+            body.getAndUpdate(s -> s + ("\"query\" : {" + toElasticsearchQuery(request.getESQuery()) + "}"));
             bodyEmpty = false;
         }
         if (!isNullOrEmpty(request.getSort())) {
             if (!bodyEmpty) {
-                body.getAndUpdate(s -> s += ",");
+                body.getAndUpdate(s -> s + ",");
             }
-            body.getAndUpdate(s -> s += "\"sort\" : [\"" + request.getSort() + "\"]");
+            body.getAndUpdate(s -> s + ("\"sort\" : [\"" + request.getSort() + "\"]"));
             bodyEmpty = false;
         }
         if (!request.getHighlighters().isEmpty()) {
             if (!bodyEmpty) {
-                body.getAndUpdate(s -> s += ",");
+                body.getAndUpdate(s -> s + ",");
             }
-            body.getAndUpdate(s -> s += "\"highlight\": { \"fields\": {");
+            body.getAndUpdate(s -> s + "\"highlight\": { \"fields\": {");
 
             AtomicBoolean moreFields = new AtomicBoolean(false);
             request.getHighlighters().forEach(f -> {
                 if (moreFields.getAndSet(true)) {
-                    body.getAndUpdate(s -> s += ",");
+                    body.getAndUpdate(s -> s + ",");
                 }
-                body.getAndUpdate(s -> s += "\"" + f + "\":{}");
+                body.getAndUpdate(s -> s + ("\"" + f + "\":{}"));
             });
-            body.getAndUpdate(s -> s += "}}");
+            body.getAndUpdate(s -> s + "}}");
             bodyEmpty = false;
         }
         if (!request.getAggregations().isEmpty()) {
             if (!bodyEmpty) {
-                body.getAndUpdate(s -> s += ",");
+                body.getAndUpdate(s -> s + ",");
             }
-            body.getAndUpdate(s -> s += "\"aggs\": {");
+            body.getAndUpdate(s -> s + "\"aggs\": {");
 
             AtomicBoolean moreFields = new AtomicBoolean(false);
             request.getAggregations().forEach(a -> {
                 if (moreFields.getAndSet(true)) {
-                    body.getAndUpdate(s -> s += ",");
+                    body.getAndUpdate(s -> s + ",");
                 }
-                body.getAndUpdate(s -> s += "\"" + a.getName() + "\":{\"terms\": {\"field\": \"" + a.getField() + "\"}}");
+                body.getAndUpdate(s -> s + ("\"" + a.getName() + "\":{\"terms\": {\"field\": \"" + a.getField() + "\"}}"));
             });
-            body.getAndUpdate(s -> s += "}");
+            body.getAndUpdate(s -> s + "}");
         }
 
-        String query = body.updateAndGet(s -> s += "}");
+        String query = body.updateAndGet(s -> s + "}");
         logger.trace("Elasticsearch query to run: {}", query);
 
         try {
-
             String response = httpPost(url, query, new AbstractMap.SimpleImmutableEntry<>("version", "true"));
             ESSearchResponse esSearchResponse = new ESSearchResponse(response);
 
@@ -611,6 +781,10 @@ public class ElasticsearchClient implements IElasticsearchClient {
         if (query instanceof ESMatchQuery) {
             ESMatchQuery esQuery = (ESMatchQuery) query;
             return "\"match\": { \"" + esQuery.getField() +  "\": \"" + esQuery.getValue() + "\"}";
+        }
+        if (query instanceof ESSemanticQuery) {
+            ESSemanticQuery esQuery = (ESSemanticQuery) query;
+            return "\"semantic\": { \"field\":\"" + esQuery.getField() +  "\", \"query\":\"" + esQuery.getValue() + "\"}";
         }
         if (query instanceof ESPrefixQuery) {
             ESPrefixQuery esQuery = (ESPrefixQuery) query;
@@ -706,11 +880,41 @@ public class ElasticsearchClient implements IElasticsearchClient {
     @Override
     public String bulk(String ndjson) throws ElasticsearchClientException {
         logger.debug("bulk a ndjson of {} characters", ndjson.length());
-
-        String response = httpPost("_bulk", ndjson);
-        return response;
+        return httpPost("_bulk", ndjson);
     }
 
+    @Override
+    public String generateApiKey(String keyName) throws ElasticsearchClientException {
+        String request = "{\"name\":\"" + keyName + "\"}";
+        logger.debug("delete any existing api key for [{}]", keyName);
+        httpDelete("/_security/api_key", request);
+
+        logger.debug("generate an api key for [{}]", keyName);
+        String response = httpPost("/_security/api_key", request);
+
+        // Parse the response
+        DocumentContext document = parseJsonAsDocumentContext(response);
+        String id = document.read("$.id");
+        String encodedApiKey;
+        try {
+            encodedApiKey = document.read("$.encoded");
+        } catch (PathNotFoundException e) {
+            // We are probably running with a version 6 which does not provide the encoded key
+            String key = document.read("$.api_key");
+            String generatedIdWithKey = id + ":" + key;
+            encodedApiKey = Base64.getEncoder().encodeToString(generatedIdWithKey.getBytes(StandardCharsets.UTF_8));
+        }
+
+        logger.debug("generated key [{}] for [{}]: [{}]", id, keyName, encodedApiKey);
+        return encodedApiKey;
+    }
+
+    @Override
+    public boolean isSemanticSupported() {
+        return semanticSearch;
+    }
+
+    @Deprecated
     private void createIndex(Path jobMappingDir, int elasticsearchVersion, String indexSettingsFile, String indexName) throws Exception {
         try {
             // If needed, we create the new settings for this files index
@@ -760,8 +964,12 @@ public class ElasticsearchClient implements IElasticsearchClient {
     }
 
     @SafeVarargs
-    private String httpCall(String method, String path, Object data, Map.Entry<String, Object>... params) throws ElasticsearchClientException {
+    private String httpCall(String method, String localPath, Object data, Map.Entry<String, Object>... params) throws ElasticsearchClientException {
         String node = getNode();
+        String path = localPath;
+        if (settings.getElasticsearch().getPathPrefix() != null) {
+            path = settings.getElasticsearch().getPathPrefix() + "/" + localPath;
+        }
         logger.trace("Calling {} {}/{} with params {}", method, node, path == null ? "" : path, params);
         try {
             Invocation.Builder callBuilder = prepareHttpCall(node, path, params);
@@ -817,8 +1025,10 @@ public class ElasticsearchClient implements IElasticsearchClient {
             if (currentNode >= hosts.size()) {
                 currentNode = 0;
             }
-            logger.debug("More than one node is available so we pick node number {} from {}.", currentNode, hosts);
-            return hosts.get(currentNode);
+
+            String node = hosts.get(currentNode);
+            logger.debug("More than one node is available so we pick node number {} from {}: {}.", currentNode, hosts, node);
+            return node;
         }
 
         // We have only one node. We just return it.
@@ -858,8 +1068,11 @@ public class ElasticsearchClient implements IElasticsearchClient {
 
         Invocation.Builder builder = target
                 .request(MediaType.APPLICATION_JSON)
-                .header("Content-Type", "application/json");
-        builder.header("User-Agent", USER_AGENT);
+                .header(HttpHeaders.CONTENT_TYPE, "application/json");
+        builder.header(HttpHeaders.USER_AGENT, USER_AGENT);
+        if (authorizationHeader != null) {
+            builder.header(HttpHeaders.AUTHORIZATION, authorizationHeader);
+        }
 
         return builder;
     }

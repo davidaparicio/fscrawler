@@ -27,13 +27,11 @@ import java.io.InputStream;
 import java.nio.file.Path;
 
 class FsCrawlerUtilForTests {
-    private static final Logger logger = LogManager.getLogger(FsCrawlerUtilForTests.class);
+    private static final Logger logger = LogManager.getLogger();
 
     private static final String CLASSPATH_RESOURCES_ROOT = "/fr/pilato/elasticsearch/crawler/fs/_default/";
     private static final String[] MAPPING_RESOURCES = {
-            "6/_settings.json", "6/_settings_folder.json",
-            "7/_settings.json", "7/_settings_folder.json", "7/_wpsearch_settings.json",
-            "8/_settings.json", "8/_settings_folder.json", "8/_wpsearch_settings.json"
+            "6/_settings.json", "6/_settings_folder.json"
     };
 
     private FsCrawlerUtilForTests() {

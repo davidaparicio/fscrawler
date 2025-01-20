@@ -20,10 +20,8 @@ package fr.pilato.elasticsearch.crawler.fs.test.framework;
 
 import com.carrotsearch.randomizedtesting.RandomizedContext;
 import com.carrotsearch.randomizedtesting.RandomizedRunner;
-import com.carrotsearch.randomizedtesting.annotations.Listeners;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakLingering;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import com.carrotsearch.randomizedtesting.annotations.TimeoutSuite;
+import com.carrotsearch.randomizedtesting.ThreadFilter;
+import com.carrotsearch.randomizedtesting.annotations.*;
 import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -59,9 +57,29 @@ import static org.junit.Assert.fail;
 @TimeoutSuite(millis = 5 * 60 * 1000)
 @ThreadLeakScope(ThreadLeakScope.Scope.SUITE)
 @ThreadLeakLingering(linger = 5000) // 5 sec lingering
+@ThreadLeakFilters(filters = {
+        AbstractFSCrawlerTestCase.TestContainerThreadFilter.class,
+        AbstractFSCrawlerTestCase.JNACleanerThreadFilter.class
+})
 public abstract class AbstractFSCrawlerTestCase {
 
-    protected static final Logger staticLogger = LogManager.getLogger(AbstractFSCrawlerTestCase.class);
+    public static class TestContainerThreadFilter implements ThreadFilter {
+        @Override
+        public boolean reject(Thread t) {
+            return
+                    t.getName().startsWith("ducttape-") ||
+                    t.getThreadGroup() != null && "testcontainers".equals(t.getThreadGroup().getName());
+        }
+    }
+
+    public static class JNACleanerThreadFilter implements ThreadFilter {
+        @Override
+        public boolean reject(Thread t) {
+            return "JNA Cleaner".equals(t.getName());
+        }
+    }
+
+    private static final Logger logger = LogManager.getLogger();
     private static final String RANDOM = "random";
 
     @Rule
@@ -84,7 +102,7 @@ public abstract class AbstractFSCrawlerTestCase {
     public static void setLocale() {
         String testLocale = getSystemProperty("tests.locale", RANDOM);
         Locale locale = testLocale.equals(RANDOM) ? randomLocale() : new Locale.Builder().setLanguageTag(testLocale).build();
-        staticLogger.debug("Running test suite with Locale [{}]", locale);
+        logger.debug("Running test suite with Locale [{}]", locale);
         Locale.setDefault(locale);
     }
 
@@ -97,7 +115,7 @@ public abstract class AbstractFSCrawlerTestCase {
     public static void setTimeZone() {
         String testTimeZone = getSystemProperty("tests.timezone", RANDOM);
         TimeZone timeZone = testTimeZone.equals(RANDOM) ? randomTimeZone() : TimeZone.getTimeZone(testTimeZone);
-        staticLogger.debug("Running test suite with TimeZone [{}]/[{}]", timeZone.getID(), timeZone.getDisplayName());
+        logger.debug("Running test suite with TimeZone [{}]/[{}]", timeZone.getID(), timeZone.getDisplayName());
         TimeZone.setDefault(timeZone);
     }
 
@@ -105,8 +123,6 @@ public abstract class AbstractFSCrawlerTestCase {
     public static void resetTimeZone() {
         TimeZone.setDefault(savedTimeZone);
     }
-
-    protected final Logger logger = LogManager.getLogger(this.getClass());
 
     protected String getCurrentTestName() {
         return toUnderscoreCase(name.getMethodName());
@@ -151,13 +167,13 @@ public abstract class AbstractFSCrawlerTestCase {
 
         while (sum + timeInMillis < maxTimeInMillis) {
             long current = breakSupplier.getAsLong();
-            staticLogger.trace("Check if {} is equal to {}", current, expected);
+            logger.trace("Check if {} is equal to {}", current, expected);
             if (expected == null && current >= 1) {
                 return current;
             } else if (expected != null && current == expected) {
                 return expected;
             }
-            staticLogger.trace("Sleep for {} because {} is not equal to {}", timeInMillis, current, expected);
+            logger.trace("Sleep for {} because {} is not equal to {}", timeInMillis, current, expected);
             Thread.sleep(timeInMillis);
             sum += timeInMillis;
             timeInMillis = Math.min(AWAIT_BUSY_THRESHOLD, timeInMillis * 2);

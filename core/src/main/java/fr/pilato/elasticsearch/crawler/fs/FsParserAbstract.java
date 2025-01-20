@@ -42,10 +42,7 @@ import fr.pilato.elasticsearch.crawler.fs.tika.XmlDocParser;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -61,7 +58,7 @@ import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.*;
 import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.asMap;
 
 public abstract class FsParserAbstract extends FsParser {
-    private static final Logger logger = LogManager.getLogger(FsParserAbstract.class);
+    private static final Logger logger = LogManager.getLogger();
 
     private static final String FSCRAWLER_IGNORE_FILENAME = ".fscrawlerignore";
 
@@ -73,6 +70,7 @@ public abstract class FsParserAbstract extends FsParser {
     private final Integer loop;
     private final MessageDigest messageDigest;
     private final String pathSeparator;
+    private final FileAbstractor<?> fileAbstractor;
 
     private ScanStatistic stats;
 
@@ -103,9 +101,23 @@ public abstract class FsParserAbstract extends FsParser {
             logger.debug("We are running on Windows without Server settings so we use the separator in accordance with fs.url");
             FileAbstractorFile.separator = pathSeparator;
         }
+
+        fileAbstractor = buildFileAbstractor(fsSettings);
     }
 
-    protected abstract FileAbstractor<?> buildFileAbstractor();
+    protected abstract FileAbstractor<?> buildFileAbstractor(FsSettings fsSettings);
+
+    @Override
+    public void close() {
+        super.close();
+        logger.trace("Closing the parser {}", this.getClass().getSimpleName());
+        try {
+            fileAbstractor.close();
+        } catch (Exception e) {
+            logger.error("Error while closing file abstractor", e);
+            throw new RuntimeException(e);
+        }
+    }
 
     @Override
     public void run() {
@@ -120,16 +132,14 @@ public abstract class FsParserAbstract extends FsParser {
             }
 
             int run = runNumber.incrementAndGet();
-            FileAbstractor<?> path = null;
 
             try {
                 logger.debug("Fs crawler thread [{}] is now running. Run #{}...", fsSettings.getName(), run);
                 stats = new ScanStatistic(fsSettings.getFs().getUrl());
 
-                path = buildFileAbstractor();
-                path.open();
+                fileAbstractor.open();
 
-                if (!path.exists(fsSettings.getFs().getUrl())) {
+                if (!fileAbstractor.exists(fsSettings.getFs().getUrl())) {
                     throw new RuntimeException(fsSettings.getFs().getUrl() + " doesn't exists.");
                 }
 
@@ -149,7 +159,7 @@ public abstract class FsParserAbstract extends FsParser {
                     scanDate = LocalDateTime.MIN;
                 }
 
-                addFilesRecursively(path, fsSettings.getFs().getUrl(), scanDate);
+                addFilesRecursively(fsSettings.getFs().getUrl(), scanDate);
 
                 updateFsJob(fsSettings.getName(), scanDatenew);
             } catch (Exception e) {
@@ -158,14 +168,13 @@ public abstract class FsParserAbstract extends FsParser {
                     logger.warn("Full stacktrace", e);
                 }
             } finally {
-                if (path != null) {
-                    try {
-                        path.close();
-                    } catch (Exception e) {
-                        logger.warn("Error while closing the connection: {}", e.getMessage());
-                        if (logger.isDebugEnabled()) {
-                            logger.warn("Full stacktrace", e);
-                        }
+                try {
+                    logger.info("Closing FS crawler file abstractor [{}].", fileAbstractor.getClass().getSimpleName());
+                    fileAbstractor.close();
+                } catch (Exception e) {
+                    logger.warn("Error while closing the connection: {}", e.getMessage());
+                    if (logger.isDebugEnabled()) {
+                        logger.warn("Full stacktrace", e);
                     }
                 }
             }
@@ -215,7 +224,7 @@ public abstract class FsParserAbstract extends FsParser {
         // We need to round that latest date to the lower second and
         // remove 2 seconds.
         // See #82: https://github.com/dadoonet/fscrawler/issues/82
-        scanDate = scanDate.minus(2, ChronoUnit.SECONDS);
+        scanDate = scanDate.minusSeconds(2);
         FsJob fsJob = FsJob.builder()
                 .setName(jobName)
                 .setLastrun(scanDate)
@@ -223,11 +232,12 @@ public abstract class FsParserAbstract extends FsParser {
                 .setDeleted(stats.getNbDocDeleted())
                 .build();
         fsJobFileHandler.write(jobName, fsJob);
+        logger.debug("Updating job metadata after run for [{}]: lastrun [{}], indexed [{}], deleted [{}]",
+                jobName, scanDate, stats.getNbDocScan(), stats.getNbDocDeleted());
     }
 
-    private void addFilesRecursively(FileAbstractor<?> path, String filepath, LocalDateTime lastScanDate)
+    private void addFilesRecursively(String filepath, LocalDateTime lastScanDate)
             throws Exception {
-
         logger.debug("indexing [{}] content", filepath);
 
         if (closed) {
@@ -235,7 +245,7 @@ public abstract class FsParserAbstract extends FsParser {
             return;
         }
 
-        final Collection<FileAbstractModel> children = path.getFiles(filepath);
+        final Collection<FileAbstractModel> children = fileAbstractor.getFiles(filepath);
         Collection<String> fsFiles = new ArrayList<>();
         Collection<String> fsFolders = new ArrayList<>();
 
@@ -272,7 +282,7 @@ public abstract class FsParserAbstract extends FsParser {
                                     InputStream inputStream = null;
                                     try {
                                         if (fsSettings.getFs().isIndexContent() || fsSettings.getFs().isStoreSource()) {
-                                            inputStream = path.getInputStream(child);
+                                            inputStream = fileAbstractor.getInputStream(child);
                                         }
                                         indexFile(child, stats, filepath, inputStream, child.getSize());
                                         stats.addFile();
@@ -284,7 +294,7 @@ public abstract class FsParserAbstract extends FsParser {
                                         }
                                     } finally {
                                         if (inputStream != null) {
-                                            path.closeInputStream(inputStream);
+                                            fileAbstractor.closeInputStream(inputStream);
                                         }
                                     }
                                 } else {
@@ -301,7 +311,7 @@ public abstract class FsParserAbstract extends FsParser {
                                 fsFolders.add(child.getFullpath());
                                 indexDirectory(child.getFullpath());
                             }
-                            addFilesRecursively(path, child.getFullpath(), lastScanDate);
+                            addFilesRecursively(child.getFullpath(), lastScanDate);
                         } else {
                             logger.debug("  - other: {}", filename);
                             logger.debug("Not a file nor a dir. Skipping {}", child.getFullpath());
@@ -310,6 +320,8 @@ public abstract class FsParserAbstract extends FsParser {
                         logger.debug("  - ignored file/dir: {}", filename);
                     }
                 }
+
+                logger.trace("End of parsing the folder [{}]", filepath);
             }
         }
 
@@ -511,7 +523,7 @@ public abstract class FsParserAbstract extends FsParser {
      * @param id        id of the folder
      * @param folder    path object
      */
-    private void indexDirectory(String id, Folder folder) throws IOException {
+    private void indexDirectory(String id, Folder folder) {
         if (!closed) {
             managementService.storeVisitedDirectory(fsSettings.getElasticsearch().getIndexFolder(), id, folder);
         } else {
@@ -527,7 +539,16 @@ public abstract class FsParserAbstract extends FsParser {
     private void indexDirectory(String path) throws Exception {
         String name = path.substring(path.lastIndexOf(pathSeparator) + 1);
         String rootdir = path.substring(0, path.lastIndexOf(pathSeparator));
-        Folder folder = new Folder(name, SignTool.sign(rootdir), path, computeVirtualPathName(stats.getRootPath(), path));
+
+        File folderInfo = new File(path);
+
+        Folder folder = new Folder(name,
+                SignTool.sign(rootdir),
+                path,
+                computeVirtualPathName(stats.getRootPath(), path),
+                getCreationTime(folderInfo),
+                getModificationTime(folderInfo),
+                getLastAccessTime(folderInfo));
 
         indexDirectory(SignTool.sign(path), folder);
     }
@@ -554,7 +575,7 @@ public abstract class FsParserAbstract extends FsParser {
     /**
      * Remove a document with the document service
      */
-    private void esDelete(FsCrawlerDocumentService service, String index, String id) throws IOException {
+    private void esDelete(FsCrawlerDocumentService service, String index, String id) {
         logger.debug("Deleting {}/{}", index, id);
         if (!closed) {
             service.delete(index, id);

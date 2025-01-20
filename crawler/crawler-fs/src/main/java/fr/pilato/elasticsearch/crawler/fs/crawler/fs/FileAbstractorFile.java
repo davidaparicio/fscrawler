@@ -31,6 +31,7 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 
@@ -43,7 +44,7 @@ import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.getModi
 import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.getOwnerName;
 
 public class FileAbstractorFile extends FileAbstractor<File> {
-    private final Logger logger = LogManager.getLogger(FileAbstractorFile.class);
+    private static final Logger logger = LogManager.getLogger();
 
     public FileAbstractorFile(FsSettings fsSettings) {
         super(fsSettings);
@@ -89,6 +90,20 @@ public class FileAbstractorFile extends FileAbstractor<File> {
     public Collection<FileAbstractModel> getFiles(String dir) {
         logger.debug("Listing local files from {}", dir);
 
+        // TODO Replace with
+        /*
+        try {
+            Files.list(Paths.get(dir))
+                    .filter(p -> fsSettings.getFs().isFollowSymlinks() || !Files.isSymbolicLink(p))
+                    // We can add the filter directly here
+                    // .filter(s -> s.toString().endsWith(".xml"))
+                    .sorted()
+                    .forEach(p -> result.add(toFileAbstractModel(dir, p.toFile())));
+        } catch (IOException e) {
+            // Logger
+        }
+        */
+
         File[] files = new File(dir).listFiles(file -> {
             if (fsSettings.getFs().isFollowSymlinks()) return true;
             return !Files.isSymbolicLink(file.toPath());
@@ -96,6 +111,9 @@ public class FileAbstractorFile extends FileAbstractor<File> {
         Collection<FileAbstractModel> result;
 
         if (files != null) {
+            // For tests purposes, we want to sort the list in a predictible way
+            Arrays.sort(files);
+
             result = new ArrayList<>(files.length);
 
             // Iterate other files

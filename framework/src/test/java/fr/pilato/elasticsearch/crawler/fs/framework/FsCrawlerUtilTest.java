@@ -22,6 +22,9 @@ package fr.pilato.elasticsearch.crawler.fs.framework;
 import fr.pilato.elasticsearch.crawler.fs.test.framework.AbstractFSCrawlerTestCase;
 import java.time.LocalDateTime;
 import java.util.TimeZone;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -52,7 +55,7 @@ import static org.hamcrest.Matchers.not;
 import static org.junit.Assume.assumeFalse;
 
 public class FsCrawlerUtilTest extends AbstractFSCrawlerTestCase {
-
+    private static final Logger logger = LogManager.getLogger();
     private static File file;
 
     @BeforeClass
@@ -95,13 +98,15 @@ public class FsCrawlerUtilTest extends AbstractFSCrawlerTestCase {
     @Test
     public void testExtractMajorVersion() {
         assertThat(extractMajorVersion("7.2.0"), is(7));
+        assertThat(extractMajorVersion("8.17.1"), is(8));
         assertThat(extractMajorVersion("10.1.0"), is(10));
     }
 
     @Test
     public void testExtractMinorVersion() {
-        assertThat(extractMinorVersion("7.2.0"), is("2"));
-        assertThat(extractMinorVersion("10.1.0"), is("1"));
+        assertThat(extractMinorVersion("7.2.0"), is(2));
+        assertThat(extractMinorVersion("8.17.1"), is(17));
+        assertThat(extractMinorVersion("10.1.0"), is(1));
     }
 
     @Test

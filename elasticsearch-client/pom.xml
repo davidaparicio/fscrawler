@@ -31,12 +31,6 @@
             <artifactId>fscrawler-beans</artifactId>
         </dependency>
 
-        <!-- Workplace search client -->
-        <dependency>
-            <groupId>fr.pilato.elasticsearch.crawler</groupId>
-            <artifactId>fscrawler-workplacesearch-client</artifactId>
-        </dependency>
-
         <!-- Rest Http Client -->
         <dependency>
             <groupId>org.glassfish.jersey.core</groupId>
@@ -69,9 +63,26 @@
             <artifactId>fscrawler-test-framework</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>elasticsearch</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>nginx</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+                <filtering>true</filtering>
+            </testResource>
+        </testResources>
+
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

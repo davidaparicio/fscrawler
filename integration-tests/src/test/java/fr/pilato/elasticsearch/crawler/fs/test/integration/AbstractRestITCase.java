@@ -19,6 +19,8 @@
 
 package fr.pilato.elasticsearch.crawler.fs.test.integration;
 
+import com.carrotsearch.randomizedtesting.ThreadFilter;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
 import fr.pilato.elasticsearch.crawler.fs.client.ESSearchHit;
 import fr.pilato.elasticsearch.crawler.fs.client.ESSearchRequest;
 import fr.pilato.elasticsearch.crawler.fs.client.ESSearchResponse;
@@ -30,16 +32,18 @@ import fr.pilato.elasticsearch.crawler.fs.rest.RestServer;
 import fr.pilato.elasticsearch.crawler.fs.rest.UploadResponse;
 import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerDocumentService;
 import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerDocumentServiceElasticsearchImpl;
-import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerDocumentServiceWorkplaceSearchImpl;
 import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerManagementServiceElasticsearchImpl;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsCrawlerValidator;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsSettings;
+import fr.pilato.elasticsearch.crawler.fs.test.framework.AbstractFSCrawlerTestCase;
 import jakarta.ws.rs.client.Client;
 import jakarta.ws.rs.client.ClientBuilder;
 import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.client.Invocation;
 import jakarta.ws.rs.client.WebTarget;
 import jakarta.ws.rs.core.MediaType;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.glassfish.jersey.jackson.JacksonFeature;
 import org.glassfish.jersey.media.multipart.FormDataMultiPart;
 import org.glassfish.jersey.media.multipart.MultiPartFeature;
@@ -50,11 +54,10 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 
 import java.io.IOException;
+import java.net.ServerSocket;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -64,7 +67,16 @@ import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.copyDir
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 
+@SuppressWarnings("ALL")
+@ThreadLeakFilters(filters = {
+        AbstractFSCrawlerTestCase.TestContainerThreadFilter.class,
+        AbstractFSCrawlerTestCase.JNACleanerThreadFilter.class,
+        AbstractRestITCase.MinioThreadFilter.class
+})
 public abstract class AbstractRestITCase extends AbstractITCase {
+    private static final Logger logger = LogManager.getLogger();
+    private static final int DEFAULT_TEST_REST_PORT = 0;
+    private static int testRestPort = getSystemProperty("tests.rest.port", DEFAULT_TEST_REST_PORT);
 
     protected static WebTarget target;
     protected static Client client;
@@ -73,7 +85,25 @@ public abstract class AbstractRestITCase extends AbstractITCase {
     private FsCrawlerManagementServiceElasticsearchImpl managementService;
     protected FsCrawlerDocumentService documentService;
 
-    public abstract FsSettings getFsSettings();
+    /**
+     * Get the Rest Port. It could be set externally. If 0,
+     * we will try to find a free port randomly
+     * @return the rest port to use
+     */
+    protected static int getRestPort() throws IOException {
+        if (testRestPort <= 0) {
+            // Find any available TCP port if 0 or check that the port is available
+            try (ServerSocket serverSocket = new ServerSocket(testRestPort)) {
+                testRestPort = serverSocket.getLocalPort();
+                logger.info("Using random rest port [{}]", testRestPort);
+            }
+        }
+
+        return testRestPort;
+    }
+
+    public abstract FsSettings getFsSettings() throws IOException;
+
     @Before
     public void copyTags() throws IOException {
         Path testResourceTarget = rootTmpDir.resolve("resources");
@@ -88,9 +118,9 @@ public abstract class AbstractRestITCase extends AbstractITCase {
 
         currentTestTagDir = testResourceTarget.resolve(currentTestName + ".tags");
         if (Files.exists(from)) {
-            staticLogger.debug("  --> Copying test resources from [{}]", from);
+            logger.debug("  --> Copying test resources from [{}]", from);
             copyDirs(from, currentTestTagDir);
-            staticLogger.debug("  --> Tags ready in [{}]", currentTestTagDir);
+            logger.debug("  --> Tags ready in [{}]", currentTestTagDir);
         }
     }
 
@@ -101,19 +131,12 @@ public abstract class AbstractRestITCase extends AbstractITCase {
         FsCrawlerValidator.validateSettings(logger, fsSettings, true);
 
         this.managementService = new FsCrawlerManagementServiceElasticsearchImpl(metadataDir, fsSettings);
-
-        if (fsSettings.getWorkplaceSearch() == null) {
-            // The documentService is using the esSearch instance
-            this.documentService = new FsCrawlerDocumentServiceElasticsearchImpl(metadataDir, fsSettings);
-        } else {
-            // The documentService is using the wpSearch instance
-            this.documentService = new FsCrawlerDocumentServiceWorkplaceSearchImpl(metadataDir, fsSettings);
-        }
+        this.documentService = new FsCrawlerDocumentServiceElasticsearchImpl(metadataDir, fsSettings);
 
         managementService.start();
         documentService.start();
 
-        RestServer.start(fsSettings, managementService, documentService);
+        RestServer.start(fsSettings, managementService, documentService, pluginsManager);
 
         logger.info(" -> Removing existing index [{}]", getCrawlerName() + "*");
         managementService.getClient().deleteIndex(getCrawlerName());
@@ -136,9 +159,9 @@ public abstract class AbstractRestITCase extends AbstractITCase {
     }
 
     public static <T> T get(String path, Class<T> clazz) {
-        if (staticLogger.isDebugEnabled()) {
+        if (logger.isDebugEnabled()) {
             String response = target.path(path).request().get(String.class);
-            staticLogger.debug("Rest response: {}", response);
+            logger.debug("Rest response: {}", response);
         }
         return target.path(path).request().get(clazz);
     }
@@ -151,6 +174,13 @@ public abstract class AbstractRestITCase extends AbstractITCase {
         return targetPath.request(MediaType.MULTIPART_FORM_DATA)
                 .accept(MediaType.APPLICATION_JSON)
                 .post(Entity.entity(mp, mp.getMediaType()), clazz);
+    }
+
+    public static <T> T post(WebTarget target, String path, String json, Class<T> clazz) {
+        WebTarget targetPath = target.path(path);
+        return targetPath.request(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .post(Entity.entity(json, MediaType.APPLICATION_JSON), clazz);
     }
 
     public static <T> T put(WebTarget target, String path, FormDataMultiPart mp, Class<T> clazz, Map<String, Object> params) {
@@ -178,7 +208,7 @@ public abstract class AbstractRestITCase extends AbstractITCase {
     }
 
     @BeforeClass
-    public static void startRestClient() {
+    public static void startRestClient() throws IOException {
         // create the client
         client = ClientBuilder.newBuilder()
                 .register(MultiPartFeature.class)
@@ -186,7 +216,7 @@ public abstract class AbstractRestITCase extends AbstractITCase {
                 .register(JacksonFeature.class)
                 .build();
 
-        target = client.target("http://127.0.0.1:" + testRestPort + "/fscrawler");
+        target = client.target("http://127.0.0.1:" + getRestPort() + "/fscrawler");
     }
 
     @AfterClass
@@ -213,7 +243,7 @@ public abstract class AbstractRestITCase extends AbstractITCase {
         void check(ESSearchHit hit);
     }
 
-    private static final Map<String, Object> debugOption = new HashMap<>();
+    protected static final Map<String, Object> debugOption = new HashMap<>();
 
     static {
         debugOption.put("debug", true);
@@ -255,10 +285,10 @@ public abstract class AbstractRestITCase extends AbstractITCase {
             // Sadly this does not work
             /*
             if (rarely()) {
-                staticLogger.info("Force index name to {} using a form field", index);
+                logger.info("Force index name to {} using a form field", index);
                 mp.field("index", index);
             } else {
-                staticLogger.info("Force index name to {} using a query string parameter", index);
+                logger.info("Force index name to {} using a query string parameter", index);
                 params.put("index", index);
             }
             */
@@ -269,10 +299,10 @@ public abstract class AbstractRestITCase extends AbstractITCase {
             // Sadly this does not work
             /*
             if (rarely()) {
-                staticLogger.info("Force id to {} using a form field", id);
+                logger.info("Force id to {} using a form field", id);
                 mp.field("id", id);
             } else {
-                staticLogger.info("Force id to {} using a query string parameter", id);
+                logger.info("Force id to {} using a query string parameter", id);
                 params.put("id", id);
             }
              */
@@ -283,8 +313,8 @@ public abstract class AbstractRestITCase extends AbstractITCase {
             mp.bodyPart(tagsFilePart);
         }
 
-        if (staticLogger.isDebugEnabled()) {
-            staticLogger.debug("Rest response: {}", post(target, api, mp, String.class, debugOption));
+        if (logger.isDebugEnabled()) {
+            logger.debug("Rest response: {}", post(target, api, mp, String.class, debugOption));
         }
 
         return post(target, api, mp, UploadResponse.class, params);
@@ -302,10 +332,10 @@ public abstract class AbstractRestITCase extends AbstractITCase {
 
         if (index != null) {
             if (rarely()) {
-                staticLogger.info("Force index name to {} using a form field", index);
+                logger.info("Force index name to {} using a form field", index);
                 mp.field("index", index);
             } else {
-                staticLogger.info("Force index name to {} using a query string parameter", index);
+                logger.info("Force index name to {} using a query string parameter", index);
                 params.put("index", index);
             }
         }
@@ -321,21 +351,33 @@ public abstract class AbstractRestITCase extends AbstractITCase {
     public static DeleteResponse deleteDocument(WebTarget target, String index, String id, String filename, String api) {
         if (id != null) {
             api = api + "/" + id;
-            staticLogger.info("Using id {}. Api is now {}", id, api);
+            logger.info("Using id {}. Api is now {}", id, api);
         }
 
         Map<String, Object> options = new HashMap<>();
 
         if (index != null) {
-            staticLogger.info("Using index {}", index);
+            logger.info("Using index {}", index);
             options.put("index", index);
         }
 
         if (filename != null) {
-            staticLogger.info("Using filename {}", filename);
+            logger.info("Using filename {}", filename);
             options.put("filename", filename);
         }
 
         return delete(target, api, DeleteResponse.class, options);
+    }
+
+    /**
+     * This is temporary until https://github.com/minio/minio-java/issues/1584 is solved
+     */
+    static public class MinioThreadFilter implements ThreadFilter {
+        @Override
+        public boolean reject(Thread t) {
+            return "Okio Watchdog".equals(t.getName())
+                    || "OkHttp TaskRunner".equals(t.getName())
+                    || "ForkJoinPool.commonPool-worker-1".equals(t.getName());
+        }
     }
 }

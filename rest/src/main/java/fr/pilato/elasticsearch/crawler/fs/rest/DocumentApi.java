@@ -20,6 +20,7 @@
 package fr.pilato.elasticsearch.crawler.fs.rest;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.jayway.jsonpath.DocumentContext;
 import fr.pilato.elasticsearch.crawler.fs.beans.Doc;
 import fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil;
 import fr.pilato.elasticsearch.crawler.fs.framework.SignTool;
@@ -27,18 +28,13 @@ import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerDocumentService;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsSettings;
 import fr.pilato.elasticsearch.crawler.fs.settings.ServerUrl;
 import fr.pilato.elasticsearch.crawler.fs.tika.TikaDocParser;
-import jakarta.ws.rs.BadRequestException;
-import jakarta.ws.rs.Consumes;
-import jakarta.ws.rs.DELETE;
-import jakarta.ws.rs.HeaderParam;
-import jakarta.ws.rs.POST;
-import jakarta.ws.rs.PUT;
-import jakarta.ws.rs.Path;
-import jakarta.ws.rs.PathParam;
-import jakarta.ws.rs.Produces;
-import jakarta.ws.rs.QueryParam;
+import fr.pilato.elasticsearch.crawler.plugins.FsCrawlerExtensionFsProvider;
+import fr.pilato.elasticsearch.crawler.plugins.FsCrawlerPluginsManager;
+import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import org.apache.commons.io.FilenameUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.glassfish.jersey.media.multipart.FormDataContentDisposition;
 import org.glassfish.jersey.media.multipart.FormDataParam;
 
@@ -53,18 +49,23 @@ import java.time.LocalDateTime;
 
 import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.localDateTimeToDate;
 import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.mapper;
+import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.parseJsonAsDocumentContext;
 
 @Path("/_document")
 public class DocumentApi extends RestApi {
+    private static final Logger logger = LogManager.getLogger();
 
     private final FsCrawlerDocumentService documentService;
     private final FsSettings settings;
     private final MessageDigest messageDigest;
     private static final TimeBasedUUIDGenerator TIME_UUID_GENERATOR = new TimeBasedUUIDGenerator();
+    private final FsCrawlerPluginsManager pluginsManager;
 
-    DocumentApi(FsSettings settings, FsCrawlerDocumentService documentService) {
+    DocumentApi(FsSettings settings, FsCrawlerDocumentService documentService, FsCrawlerPluginsManager pluginsManager) {
         this.settings = settings;
         this.documentService = documentService;
+        this.pluginsManager = pluginsManager;
+
         // Create MessageDigest instance
         try {
             messageDigest = settings.getFs().getChecksum() == null ?
@@ -110,6 +111,44 @@ public class DocumentApi extends RestApi {
             @FormDataParam("file") FormDataContentDisposition d) throws IOException, NoSuchAlgorithmException {
         String index = formIndex != null ? formIndex : headerIndex != null ? headerIndex : queryParamIndex;
         return uploadToDocumentService(debug, simulate, id, index, tags, filecontent, d);
+    }
+
+    @POST
+    @Produces(MediaType.APPLICATION_JSON)
+    @Consumes(MediaType.APPLICATION_JSON)
+    public UploadResponse addDocumentFrom3rdParty(
+            @QueryParam("debug") String debug,
+            @QueryParam("simulate") String simulate,
+            @QueryParam("id") String queryParamId,
+            @QueryParam("index") String queryParamIndex,
+            @HeaderParam("id") String headerId,
+            @HeaderParam("index") String headerIndex,
+            InputStream json) {
+        String id = headerId != null ? headerId : queryParamId;
+        String index = headerIndex != null ? headerIndex : queryParamIndex;
+
+        DocumentContext document = parseJsonAsDocumentContext(json);
+        String type = document.read("$.type");
+
+        logger.debug("Reading document from 3rd-party [{}]", type);
+
+        try (FsCrawlerExtensionFsProvider provider = pluginsManager.findFsProvider(type)) {
+            provider.settings(document.jsonString());
+            provider.start();
+            InputStream inputStream = provider.readFile();
+            String filename = provider.getFilename();
+            long filesize = provider.getFilesize();
+
+            return uploadToDocumentService(debug, simulate, id, index, null, inputStream, filename, filesize);
+        } catch (Exception e) {
+            logger.debug("Failed to add document from [{}] 3rd-party: [{}] - [{}]",
+                    type, e.getClass().getSimpleName(), e.getMessage());
+            UploadResponse response = new UploadResponse();
+            response.setOk(false);
+            response.setMessage("Failed to add document from [" + type + "] 3rd-party: ["
+                    + e.getClass().getSimpleName() + "] - [" + e.getMessage() + "]");
+            return response;
+        }
     }
 
     @DELETE
@@ -158,19 +197,35 @@ public class DocumentApi extends RestApi {
             InputStream tags,
             InputStream filecontent,
             FormDataContentDisposition d) throws IOException, NoSuchAlgorithmException {
-
-        logger.debug("uploadToDocumentService({}, {}, {}, {}, ...)", debug, simulate, id, index);
-
-        // Create the Doc object
-        Doc doc = new Doc();
-
+        if (d == null) {
+            UploadResponse response = new UploadResponse();
+            response.setOk(false);
+            response.setMessage("No file has been sent or you are not using [file] as the field name.");
+            return response;
+        }
         String filename = new String(d.getFileName().getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
         long filesize = d.getSize();
+
+        return uploadToDocumentService(debug, simulate, id, index, tags, filecontent, filename, filesize);
+    }
+
+    private UploadResponse uploadToDocumentService(
+            String debug,
+            String simulate,
+            String id,
+            String index,
+            InputStream tags,
+            InputStream filecontent,
+            String filename,
+            long filesize) throws IOException, NoSuchAlgorithmException {
+        // Create the Doc object
+        Doc doc = new Doc();
 
         // File
         doc.getFile().setFilename(filename);
         doc.getFile().setExtension(FilenameUtils.getExtension(filename).toLowerCase());
         doc.getFile().setIndexingDate(localDateTimeToDate(LocalDateTime.now()));
+        doc.getFile().setFilesize(filesize);
         // File
 
         // Path
@@ -200,11 +255,11 @@ public class DocumentApi extends RestApi {
         // Elasticsearch entity coordinates (we use the first node address)
         ServerUrl node = settings.getElasticsearch().getNodes().get(0);
         String url = node.getUrl() + "/" + index + "/_doc/" + id;
+        final Doc mergedDoc = this.getMergedJsonDoc(doc, tags);
         if (Boolean.parseBoolean(simulate)) {
             logger.debug("Simulate mode is on, so we skip sending document [{}] to elasticsearch at [{}].", filename, url);
         } else {
             logger.debug("Sending document [{}] to elasticsearch.", filename);
-            final Doc mergedDoc = this.getMergedJsonDoc(doc, tags);
             documentService.index(
                     index,
                     id,
@@ -219,7 +274,7 @@ public class DocumentApi extends RestApi {
 
         if (logger.isDebugEnabled() || Boolean.parseBoolean(debug)) {
             // We send the content back if debug is on or if we got in the query explicitly a debug command
-            response.setDoc(doc);
+            response.setDoc(mergedDoc);
         }
 
         return response;

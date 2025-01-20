@@ -37,5 +37,13 @@
                 <include>log4j2-file.xml</include>
             </includes>
         </fileSet>
+        <fileSet>
+            <directory>src/main/plugins</directory>
+            <outputDirectory>plugins</outputDirectory>
+        </fileSet>
+        <fileSet>
+            <directory>src/main/external</directory>
+            <outputDirectory>external</outputDirectory>
+        </fileSet>
     </fileSets>
 </assembly>

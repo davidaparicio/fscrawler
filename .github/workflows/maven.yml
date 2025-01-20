@@ -5,38 +5,21 @@ on:
     branches: [ master ]
 
 jobs:
-  # We update files if needed
-  update-files:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PAT || github.token }}
-          ref: ${{ github.head_ref }}
-      - name: Update resources with Maven
-        run: mvn -B  generate-resources
-      - name: Update files if needed
-        uses: stefanzweifel/git-auto-commit-action@v5
   build:
     runs-on: ubuntu-latest
-    needs: update-files
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK 17 and Maven Central Repository
-        uses: actions/setup-java@v3
+      - name: Set up JDK 21 and Maven Central Repository
+        uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'adopt'
+          java-version: '21'
+          distribution: 'temurin'
           cache: 'maven'
           server-id: sonatype-nexus-snapshots
           server-username: MAVEN_USERNAME
           server-password: MAVEN_CENTRAL_TOKEN
       - name: Cache Docker images
-        uses: ScribeMD/docker-cache@0.3.6
+        uses: ScribeMD/docker-cache@0.5.0
         with:
           key: fscrawler-docker-cache-${{ runner.os }}-${{ hashFiles('pom.xml') }}
         continue-on-error: true
@@ -48,17 +31,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK 17 and Maven Central Repository
-        uses: actions/setup-java@v3
+      - name: Set up JDK 21 and Maven Central Repository
+        uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'adopt'
+          java-version: '21'
+          distribution: 'temurin'
           cache: 'maven'
           server-id: sonatype-nexus-snapshots
           server-username: MAVEN_USERNAME
           server-password: MAVEN_CENTRAL_TOKEN
       - name: Cache Docker images
-        uses: ScribeMD/docker-cache@0.3.6
+        uses: ScribeMD/docker-cache@0.5.0
         with:
           key: fscrawler-docker-cache-${{ runner.os }}-${{ hashFiles('pom.xml') }}
         continue-on-error: true

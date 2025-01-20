@@ -37,11 +37,11 @@ import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.mapper;
 @SuppressWarnings("unchecked")
 public class XmlDocParser {
 
-    private final static Logger logger = LogManager.getLogger(XmlDocParser.class);
+    private final static Logger logger = LogManager.getLogger();
     private static final ObjectMapper xmlMapper;
 
     static {
-        xmlMapper = new XmlMapper();
+        xmlMapper = XmlMapper.xmlBuilder().nameForTextElement("$").build();
     }
 
     public static String generate(InputStream inputStream) {

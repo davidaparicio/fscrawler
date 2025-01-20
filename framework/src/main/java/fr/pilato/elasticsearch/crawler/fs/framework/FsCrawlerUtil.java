@@ -28,11 +28,8 @@ import org.apache.logging.log4j.Logger;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
 import java.nio.file.CopyOption;
 import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystems;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -40,7 +37,6 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileOwnerAttributeView;
@@ -50,24 +46,15 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.Date;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
-import java.util.TimeZone;
+import java.util.*;
 import java.util.regex.Pattern;
 
 public class FsCrawlerUtil {
     public static final String INDEX_SUFFIX_FOLDER = "_folder";
     public static final String INDEX_SETTINGS_FILE = "_settings";
-    public static final String INDEX_WORKPLACE_SEARCH_SETTINGS_FILE = "_wpsearch_settings";
     public static final String INDEX_SETTINGS_FOLDER_FILE = "_settings_folder";
 
-    private static final Logger logger = LogManager.getLogger(FsCrawlerUtil.class);
+    private static final Logger logger = LogManager.getLogger();
 
     /**
      * Reads a mapping from config/_default/version/type.json file
@@ -202,22 +189,11 @@ public class FsCrawlerUtil {
 
         // No rules ? Fine, we index everything
         if (excludes == null || excludes.isEmpty()) {
-            logger.trace("no rules");
+            logger.trace("no rules = no exclusion");
             return false;
         }
 
-        // Exclude rules : we know that whatever includes rules are, we should exclude matching files
-        for (String exclude : excludes) {
-            String regex = exclude.toLowerCase().replace("?", ".?").replace("*", ".*?");
-            logger.trace("regex is [{}]", regex);
-            if (filename.toLowerCase().matches(regex)) {
-                logger.trace("does match exclude regex");
-                return true;
-            }
-        }
-
-        logger.trace("does not match any exclude pattern");
-        return false;
+        return isMatching(filename, excludes, "exclusion");
     }
 
     /**
@@ -231,20 +207,28 @@ public class FsCrawlerUtil {
 
         // No rules ? Fine, we index everything
         if (includes == null || includes.isEmpty()) {
-            logger.trace("no include rules");
+            logger.trace("no rules = include all");
             return true;
         }
 
-        for (String include : includes) {
-            String regex = include.toLowerCase().replace("?", ".?").replace("*", ".*?");
-            logger.trace("regex is [{}]", regex);
-            if (filename.toLowerCase().matches(regex)) {
-                logger.trace("does match include regex");
+        return isMatching(filename, includes, "inclusion");
+    }
+
+    public static boolean isMatching(String filename, List<String> matches, String type) {
+        logger.debug("checking {} for filename = [{}], matches = [{}]", type, filename, matches);
+
+        for (String match : matches) {
+            String regex = match.toLowerCase().replace("?", ".?").replace("*", ".*");
+            String filenameLowerCase = filename.toLowerCase();
+            if (filenameLowerCase.matches(regex)) {
+                logger.trace("✅ [{}] does match {} regex [{}] (was [{}])", filenameLowerCase, type, regex, match);
                 return true;
+            } else {
+                logger.trace("❌ [{}] does not match {} regex [{}] (was [{}])", filenameLowerCase, type, regex, match);
             }
         }
 
-        logger.trace("does not match any include pattern");
+        logger.trace("does not match any pattern for {}", type);
         return false;
     }
 
@@ -271,10 +255,10 @@ public class FsCrawlerUtil {
             Pattern pattern = Pattern.compile(filter, Pattern.MULTILINE | Pattern.UNIX_LINES);
             logger.trace("Testing filter [{}]", filter);
             if (!pattern.matcher(content).find()) {
-                logger.trace("Filter [{}] is not matching.", filter);
+                logger.trace("Filter [{}] is not matching.", filter);
                 return false;
             } else {
-                logger.trace("Filter [{}] is matching.", filter);
+                logger.trace("Filter [{}] is matching.", filter);
             }
         }
 
@@ -446,11 +430,9 @@ public class FsCrawlerUtil {
         return (read ? 4 : 0) + (write ? 2 : 0) + (execute ? 1 : 0);
     }
 
-    private static final String CLASSPATH_RESOURCES_ROOT = "/fr/pilato/elasticsearch/crawler/fs/_default/";
+    public static final String CLASSPATH_RESOURCES_ROOT = "/fr/pilato/elasticsearch/crawler/fs/_default/";
     public static final String[] MAPPING_RESOURCES = {
-            "6/_settings.json", "6/_settings_folder.json",
-            "7/_settings.json", "7/_settings_folder.json", "7/_wpsearch_settings.json",
-            "8/_settings.json", "8/_settings_folder.json", "8/_wpsearch_settings.json"
+            "6/_settings.json", "6/_settings_folder.json"
     };
 
     /**
@@ -556,40 +538,6 @@ public class FsCrawlerUtil {
         }
     }
 
-    /**
-     * Unzip a jar file
-     * @param jarFile Jar file url like file:/path/to/foo.jar
-     * @param destination Directory where we want to extract the content to
-     * @throws IOException In case of any IO problem
-     */
-    public static void unzip(String jarFile, Path destination) throws IOException {
-        Map<String, String> zipProperties = new HashMap<>();
-        /* We want to read an existing ZIP File, so we set this to false */
-        zipProperties.put("create", "false");
-        zipProperties.put("encoding", "UTF-8");
-        URI zipFile = URI.create("jar:" + jarFile);
-
-        try (FileSystem zipfs = FileSystems.newFileSystem(zipFile, zipProperties)) {
-            Path rootPath = zipfs.getPath("/");
-            Files.walkFileTree(rootPath, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                    Path targetPath = destination.resolve(rootPath.relativize(dir).toString());
-                    if (!Files.exists(targetPath)) {
-                        Files.createDirectory(targetPath);
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    Files.copy(file, destination.resolve(rootPath.relativize(file).toString()), StandardCopyOption.COPY_ATTRIBUTES, StandardCopyOption.REPLACE_EXISTING);
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        }
-    }
-
     public static boolean isNullOrEmpty(String string) {
         return string == null || string.isEmpty();
     }
@@ -651,7 +599,7 @@ public class FsCrawlerUtil {
         return Integer.parseInt(version.split("\\.")[0]);
     }
 
-    public static String extractMinorVersion(String version) {
-        return version.split("\\.")[1];
+    public static int extractMinorVersion(String version) {
+        return Integer.parseInt(version.split("\\.")[1]);
     }
 }

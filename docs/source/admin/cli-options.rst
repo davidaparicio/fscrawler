@@ -5,12 +5,12 @@ CLI options
 
 -  ``--help`` displays help
 -  ``--silent`` runs in silent mode. No output is generated on the console.
--  ``--debug`` runs in debug mode. This applies to log files only. See also :ref:`logger`.
--  ``--trace`` runs in trace mode (more verbose than debug). This applies to log files only. See also :ref:`logger`.
 -  ``--config_dir`` defines directory where jobs are stored instead of
    default ``~/.fscrawler``.
--  ``--username`` defines the username to use when using an secured
-   version of elasticsearch cluster. Read :ref:`credentials`.
+-  ``--api_key`` defines the Elasticsearch Api Key to use.
+   Do not use with ``--username``. Read :ref:`credentials`.
+-  ``--username`` defines the username to use (Deprecated).
+   Do not use with ``--api_key``. Read :ref:`credentials`.
 -  ``--loop x`` defines the number of runs we want before exiting. See `Loop`_.
 -  ``--restart`` restart a job from scratch. See `Restart`_.
 -  ``--rest`` starts the REST service. See `Rest`_.
@@ -18,8 +18,6 @@ CLI options
 
 Loop
 ----
-
-.. versionadded:: 2.2
 
 ``--loop x`` defines the number of runs we want before exiting:
 
@@ -33,8 +31,6 @@ If you want to scan your hard drive only once, run with ``--loop 1``.
 Restart
 -------
 
-.. versionadded:: 2.2
-
 You can tell FSCrawler that it must restart from the beginning by using
 ``--restart`` option:
 
@@ -46,8 +42,6 @@ In that case, the ``{job_name}/_status.json`` file will be removed.
 
 Rest
 ----
-
-.. versionadded:: 2.3
 
 If you want to run the :ref:`rest-service` without scanning
 your hard drive, launch with:

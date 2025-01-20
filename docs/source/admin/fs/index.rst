@@ -92,14 +92,24 @@ The job file (``~/.fscrawler/test/_settings.yaml``) for the job name ``test`` mu
      bulk_size: 1000
      flush_interval: "5s"
      byte_size: "10mb"
+     # choose one of the 3 following options:
+     # 1 - Using access token
+     access_token: "dGhpcyBpcyBub3QgYSByZWFsIHRva2VuIGJ1dCBpdCBpcyBvbmx5IHRlc3QgZGF0YS4gZG8gbm90IHRyeSB0byByZWFkIHRva2VuIQ=="
+     # 2 - Using Api Key
+     api_key: "VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
+     # 3 - Using username/password (not recommended / deprecated)
      username: "elastic"
      password: "password"
-     # optional, defaults to "docs"
+     # optional, defaults to ``name``-property
      index: "test_docs"
      # optional, defaults to "test_folders", used when es.index_folders is set to true
      index_folder: "test_fold"
+     # optional, defaults to "true"
+     push_templates: "true"
+     # optional, defaults to "true", used with Elasticsearch 8.17+ with a trial or enterprise license
+     semantic_search: "true"
+   # only used when started with --rest option
    rest:
-     # only is started with --rest option
      url: "http://127.0.0.1:8080/fscrawler"
 
 Here is a list of existing top level settings:
@@ -117,8 +127,6 @@ Here is a list of existing top level settings:
 +-----------------------------------+-------------------------------+
 | ``rest``                          | :ref:`rest-service`           |
 +-----------------------------------+-------------------------------+
-
-.. versionadded:: 2.7
 
 You can define your job settings either in ``_settings.yaml`` (using ``.yaml`` extension) or
 in ``_settings.json`` (using ``.json`` extension).

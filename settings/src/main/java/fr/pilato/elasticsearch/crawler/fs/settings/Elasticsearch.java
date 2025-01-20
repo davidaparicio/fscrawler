@@ -32,9 +32,8 @@ import java.util.List;
 import java.util.Objects;
 
 public class Elasticsearch {
-
-    protected static final Logger logger = LogManager.getLogger(Elasticsearch.class);
-    public static final ServerUrl NODE_DEFAULT = new ServerUrl("http://127.0.0.1:9200");
+    private static final Logger logger = LogManager.getLogger();
+    public static final ServerUrl NODE_DEFAULT = new ServerUrl("https://127.0.0.1:9200");
 
     private List<ServerUrl> nodes = Collections.singletonList(NODE_DEFAULT);
     private String index;
@@ -42,31 +41,53 @@ public class Elasticsearch {
     private int bulkSize = 100;
     private TimeValue flushInterval = TimeValue.timeValueSeconds(5);
     private ByteSizeValue byteSize = new ByteSizeValue(10, ByteSizeUnit.MB);
+    private String apiKey;
+
+    /**
+     * Username
+     * @deprecated Use apiKey or accessToken instead
+     */
+    @Deprecated
     private String username;
+    /**
+     * Password
+     * @deprecated Use apiKey or accessToken instead
+     */
+    @Deprecated
     @JsonIgnore
     private String password;
     private String pipeline;
     private String pathPrefix;
     private boolean sslVerification = true;
+    private boolean pushTemplates = true;
+    private String caCertificate;
+    private boolean semanticSearch = true;
 
     public Elasticsearch() {
 
     }
 
     private Elasticsearch(List<ServerUrl> nodes, String index, String indexFolder, int bulkSize,
-                          TimeValue flushInterval, ByteSizeValue byteSize, String username, String password, String pipeline,
-                          String pathPrefix, boolean sslVerification) {
+                          TimeValue flushInterval, ByteSizeValue byteSize, String apiKey,
+                          String username, String password, String pipeline,
+                          String pathPrefix, boolean sslVerification,
+                          String caCertificate,
+                          boolean pushTemplates, boolean semanticSearch) {
         this.nodes = nodes;
         this.index = index;
         this.indexFolder = indexFolder;
         this.bulkSize = bulkSize;
         this.flushInterval = flushInterval;
         this.byteSize = byteSize;
+        this.apiKey = apiKey;
         this.username = username;
         this.password = password;
         this.pipeline = pipeline;
         this.pathPrefix = pathPrefix;
         this.sslVerification = sslVerification;
+        this.caCertificate = caCertificate;
+        this.pushTemplates = pushTemplates;
+        this.semanticSearch = semanticSearch;
     }
 
     public static Builder builder() {
@@ -111,11 +132,26 @@ public class Elasticsearch {
         return byteSize;
     }
 
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
     public String getUsername() {
         return username;
     }
 
+    /**
+     * Provide the username to connect to Elasticsearch
+     * @param username The username
+     * @deprecated Use {@link #setApiKey(String)} instead
+     */
+    @Deprecated
     public void setUsername(String username) {
+        logger.warn("username is deprecated. Use apiKey instead.");
         this.username = username;
     }
 
@@ -124,12 +160,15 @@ public class Elasticsearch {
         return password;
     }
 
-    public boolean getSslVerification() {
-        return sslVerification;
-    }
-
+    /**
+     * Provide the password to connect to Elasticsearch
+     * @param password The password
+     * @deprecated Use {@link #setApiKey(String)} instead
+     */
+    @Deprecated
     @JsonProperty
     public void setPassword(String password) {
+        logger.warn("password is deprecated. Use apiKey instead.");
         this.password = password;
     }
 
@@ -149,8 +188,36 @@ public class Elasticsearch {
         this.pathPrefix = pathPrefix;
     }
 
+    public boolean isSslVerification() {
+        return sslVerification;
+    }
+
     public void setSslVerification(boolean sslVerification) {
         this.sslVerification = sslVerification;
+    }
+
+    public boolean isPushTemplates() {
+        return pushTemplates;
+    }
+
+    public void setPushTemplates(boolean pushTemplates) {
+        this.pushTemplates = pushTemplates;
+    }
+
+    public String getCaCertificate() {
+        return caCertificate;
+    }
+
+    public void setCaCertificate(String caCertificate) {
+        this.caCertificate = caCertificate;
+    }
+
+    public boolean isSemanticSearch() {
+        return semanticSearch;
+    }
+
+    public void setSemanticSearch(boolean semanticSearch) {
+        this.semanticSearch = semanticSearch;
     }
 
     @SuppressWarnings("UnusedReturnValue")
@@ -166,6 +233,10 @@ public class Elasticsearch {
         private String pipeline = null;
         private String pathPrefix = null;
         private boolean sslVerification = true;
+        private String caCertificate;
+        private boolean pushTemplates = true;
+        private String apiKey = null;
+        private boolean semanticSearch = true;
 
         public Builder setNodes(List<ServerUrl> nodes) {
             this.nodes = nodes;
@@ -197,13 +268,55 @@ public class Elasticsearch {
             return this;
         }
 
+        public Builder setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+            return this;
+        }
+
+        /**
+         * Set the username (for tests only)
+         * @param username  Username
+         * @return the current builder
+         * @deprecated Use {@link #setApiKey(String)} instead
+         */
+        @Deprecated
         public Builder setUsername(String username) {
+            logger.warn("username is deprecated. Use apiKey instead.");
             this.username = username;
             return this;
         }
 
+        /**
+         * Set the password (for tests only)
+         * @param password  Password
+         * @return the current builder
+         * @deprecated Use {@link #setApiKey(String)} instead
+         */
+        @Deprecated
         public Builder setPassword(String password) {
+            logger.warn("password is deprecated. Use apiKey instead.");
             this.password = password;
+            return this;
+        }
+
+        /**
+         * Set the credentials depending on what is available.
+         * This is a helper method to set either apiKey or username/password.
+         * @param apiKey        API Key (omitted if null)
+         * @param username      Username (omitted if null)
+         * @param password      Password (omitted if null)
+         * @return the current builder
+         */
+        public Builder setCredentials(String apiKey, String username, String password) {
+            if (apiKey != null) {
+                logger.trace("using api key [{}]", apiKey);
+                this.setApiKey(apiKey);
+            } else if (username != null && password != null) {
+                logger.trace("using login/password [{}]/[{}]", username, password);
+                this.setUsername(username);
+                this.setPassword(password);
+            }
+
             return this;
         }
 
@@ -222,8 +335,27 @@ public class Elasticsearch {
             return this;
         }
 
+        public Builder setCaCertificate(String caCertificate) {
+            this.caCertificate = caCertificate;
+            return this;
+        }
+
+        public Builder setPushTemplates(boolean pushTemplates) {
+            this.pushTemplates = pushTemplates;
+            return this;
+        }
+
+        public Builder setSemanticSearch(boolean semanticSearch) {
+            this.semanticSearch = semanticSearch;
+            return this;
+        }
+
         public Elasticsearch build() {
-            return new Elasticsearch(nodes, index, indexFolder, bulkSize, flushInterval, byteSize, username, password, pipeline, pathPrefix, sslVerification);
+            return new Elasticsearch(nodes, index, indexFolder, bulkSize, flushInterval, byteSize, apiKey,
+                    username, password,
+                    pipeline, pathPrefix,
+                    sslVerification, caCertificate,
+                    pushTemplates, semanticSearch);
         }
     }
 
@@ -238,11 +370,14 @@ public class Elasticsearch {
         if (!Objects.equals(nodes, that.nodes)) return false;
         if (!Objects.equals(index, that.index)) return false;
         if (!Objects.equals(indexFolder, that.indexFolder)) return false;
+        if (!Objects.equals(apiKey, that.apiKey)) return false;
         if (!Objects.equals(username, that.username)) return false;
         // We can't really test the password as it may be obfuscated
         if (!Objects.equals(pipeline, that.pipeline)) return false;
         if (!Objects.equals(pathPrefix, that.pathPrefix)) return false;
         if (!Objects.equals(sslVerification, that.sslVerification)) return false;
+        if (!Objects.equals(caCertificate, that.caCertificate)) return false;
+        if (!Objects.equals(pushTemplates, that.pushTemplates)) return false;
         return Objects.equals(flushInterval, that.flushInterval);
 
     }
@@ -253,11 +388,14 @@ public class Elasticsearch {
         result = 31 * result + (index != null ? index.hashCode() : 0);
         result = 31 * result + (indexFolder != null ? indexFolder.hashCode() : 0);
         result = 31 * result + (username != null ? username.hashCode() : 0);
+        result = 31 * result + (apiKey != null ? apiKey.hashCode() : 0);
         result = 31 * result + (pipeline != null ? pipeline.hashCode() : 0);
         result = 31 * result + (pathPrefix != null ? pathPrefix.hashCode() : 0);
         result = 31 * result + bulkSize;
         result = 31 * result + (flushInterval != null ? flushInterval.hashCode() : 0);
+        result = 31 * result + (caCertificate != null ? caCertificate.hashCode() : 0);
         result = 31 * result + (sslVerification? 1: 0);
+        result = 31 * result + (pushTemplates? 1: 0);
         return result;
     }
 
@@ -273,6 +411,8 @@ public class Elasticsearch {
                 ", pipeline='" + pipeline + '\'' +
                 ", pathPrefix='" + pathPrefix + '\'' +
                 ", sslVerification='" + sslVerification + '\'' +
+                ", caCertificatePath='" + caCertificate + '\'' +
+                ", pushTemplates='" + pushTemplates + '\'' +
                 '}';
     }
 }

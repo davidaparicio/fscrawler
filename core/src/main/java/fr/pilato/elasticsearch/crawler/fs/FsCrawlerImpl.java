@@ -23,7 +23,6 @@ import fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil;
 import fr.pilato.elasticsearch.crawler.fs.framework.TimeValue;
 import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerDocumentService;
 import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerDocumentServiceElasticsearchImpl;
-import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerDocumentServiceWorkplaceSearchImpl;
 import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerManagementService;
 import fr.pilato.elasticsearch.crawler.fs.service.FsCrawlerManagementServiceElasticsearchImpl;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsCrawlerValidator;
@@ -44,40 +43,29 @@ public class FsCrawlerImpl implements AutoCloseable {
     @Deprecated
     public static final String INDEX_TYPE_FOLDER = "folder";
 
-    private static final Logger logger = LogManager.getLogger(FsCrawlerImpl.class);
+    private static final Logger logger = LogManager.getLogger();
 
     public static final int LOOP_INFINITE = -1;
     public static final long MAX_SLEEP_RETRY_TIME = TimeValue.timeValueSeconds(30).millis();
 
     private final FsSettings settings;
     private final boolean rest;
-    private final Path config;
     private final Integer loop;
-
-    private Thread fsCrawlerThread;
 
     private final FsCrawlerDocumentService documentService;
     private final FsCrawlerManagementService managementService;
-
-    private FsParser fsParser;
+    private final FsParser fsParser;
+    private final Thread fsCrawlerThread;
 
     public FsCrawlerImpl(Path config, FsSettings settings, Integer loop, boolean rest) {
         FsCrawlerUtil.createDirIfMissing(config);
 
-        this.config = config;
         this.settings = settings;
         this.loop = loop;
         this.rest = rest;
 
         this.managementService = new FsCrawlerManagementServiceElasticsearchImpl(config, settings);
-
-        if (settings.getWorkplaceSearch() == null) {
-            // The documentService is using the esSearch instance
-            this.documentService = new FsCrawlerDocumentServiceElasticsearchImpl(config, settings);
-        } else {
-            // The documentService is using the wpSearch instance
-            this.documentService = new FsCrawlerDocumentServiceWorkplaceSearchImpl(config, settings);
-        }
+        this.documentService = new FsCrawlerDocumentServiceElasticsearchImpl(config, settings);
 
         // We don't go further as we have critical errors
         // It's just a double check as settings must be validated before creating the instance
@@ -92,6 +80,29 @@ public class FsCrawlerImpl implements AutoCloseable {
         } catch (IOException e) {
             throw new RuntimeException("Can not create the job config directory", e);
         }
+
+        // Create the fsParser instance depending on the settings
+        if (loop != 0) {
+            // What is the protocol used?
+            if (settings.getServer() == null || Server.PROTOCOL.LOCAL.equals(settings.getServer().getProtocol())) {
+                // Local FS
+                fsParser = new FsParserLocal(settings, config, managementService, documentService, loop);
+            } else if (Server.PROTOCOL.SSH.equals(settings.getServer().getProtocol())) {
+                // Remote SSH FS
+                fsParser = new FsParserSsh(settings, config, managementService, documentService, loop);
+            } else if (Server.PROTOCOL.FTP.equals(settings.getServer().getProtocol())) {
+                // Remote FTP FS
+                fsParser = new FsParserFTP(settings, config, managementService, documentService, loop);
+            } else {
+                // Non supported protocol
+                throw new RuntimeException(settings.getServer().getProtocol() + " is not supported yet. Please use " +
+                        Server.PROTOCOL.LOCAL + " or " + Server.PROTOCOL.SSH);
+            }
+        } else {
+            // We start a No-OP parser
+            fsParser = new FsParserNoop(settings);
+        }
+        fsCrawlerThread = new Thread(fsParser, "fs-crawler");
     }
 
     public FsCrawlerDocumentService getDocumentService() {
@@ -117,32 +128,10 @@ public class FsCrawlerImpl implements AutoCloseable {
         documentService.start();
         documentService.createSchema();
 
-        // Start the crawler thread - but not if only in rest mode
-        if (loop != 0) {
-            // What is the protocol used?
-            if (settings.getServer() == null || Server.PROTOCOL.LOCAL.equals(settings.getServer().getProtocol())) {
-                // Local FS
-                fsParser = new FsParserLocal(settings, config, managementService, documentService, loop);
-            } else if (Server.PROTOCOL.SSH.equals(settings.getServer().getProtocol())) {
-                // Remote SSH FS
-                fsParser = new FsParserSsh(settings, config, managementService, documentService, loop);
-            } else if (Server.PROTOCOL.FTP.equals(settings.getServer().getProtocol())) {
-                // Remote FTP FS
-                fsParser = new FsParserFTP(settings, config, managementService, documentService, loop);
-            } else {
-                // Non supported protocol
-                throw new RuntimeException(settings.getServer().getProtocol() + " is not supported yet. Please use " +
-                        Server.PROTOCOL.LOCAL + " or " + Server.PROTOCOL.SSH);
-            }
-        } else {
-            // We start a No-OP parser
-            fsParser = new FsParserNoop(settings);
-        }
-
-        fsCrawlerThread = new Thread(fsParser, "fs-crawler");
         fsCrawlerThread.start();
     }
 
+    @Override
     public void close() throws InterruptedException, IOException {
         logger.debug("Closing FS crawler [{}]", settings.getName());
 

@@ -20,6 +20,8 @@
 package fr.pilato.elasticsearch.crawler.fs.settings;
 
 import fr.pilato.elasticsearch.crawler.fs.test.framework.AbstractFSCrawlerTestCase;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.Test;
 
 import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.INDEX_SUFFIX_FOLDER;
@@ -30,6 +32,7 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
 public class FsCrawlerValidatorTest extends AbstractFSCrawlerTestCase {
+    private static final Logger logger = LogManager.getLogger();
 
     @Test
     public void testSettingsValidation() {
@@ -86,31 +89,6 @@ public class FsCrawlerValidatorTest extends AbstractFSCrawlerTestCase {
         settings = buildSettings(null, null);
         assertThat(FsCrawlerValidator.validateSettings(logger, settings, true), is(false));
         assertThat(settings.getRest(), notNullValue());
-    }
-
-    @Test
-    public void testSettingsValidationWithWorkplaceSearch() {
-        // Checking default values
-        FsSettings settings = buildSettings(Fs.builder().build(), null);
-        settings.setWorkplaceSearch(WorkplaceSearch.builder().build());
-        assertThat(settings.getFs().getUrl(), is(Fs.DEFAULT_DIR));
-
-        // Check that the default fs.remove_deleted is true
-        assertThat(settings.getFs().isRemoveDeleted(), is(true));
-
-        assertThat(FsCrawlerValidator.validateSettings(logger, settings, false), is(false));
-        assertThat(settings.getFs().getUrl(), is(Fs.DEFAULT_DIR));
-        assertThat(settings.getElasticsearch().getNodes(), hasItem(Elasticsearch.NODE_DEFAULT));
-        assertThat(settings.getElasticsearch().getIndex(), is(getCurrentTestName()));
-        assertThat(settings.getElasticsearch().getIndexFolder(), is(getCurrentTestName() + INDEX_SUFFIX_FOLDER));
-        assertThat(settings.getServer(), nullValue());
-        assertThat(settings.getRest(), nullValue());
-        assertThat(settings.getWorkplaceSearch(), notNullValue());
-        assertThat(settings.getWorkplaceSearch().getServer(), is(WorkplaceSearch.DEFAULT_SERVER));
-        assertThat(settings.getWorkplaceSearch().getUrlPrefix(), is(WorkplaceSearch.DEFAULT_URL_PREFIX));
-
-        // Check that after the validation of settings we have modified fs.remove_deleted to false
-        assertThat(settings.getFs().isRemoveDeleted(), is(false));
     }
 
     private FsSettings buildSettings(Fs fs, Server server) {

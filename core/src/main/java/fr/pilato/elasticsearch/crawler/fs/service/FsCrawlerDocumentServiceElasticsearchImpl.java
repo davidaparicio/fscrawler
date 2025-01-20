@@ -37,7 +37,7 @@ import static fr.pilato.elasticsearch.crawler.fs.framework.JsonUtil.serialize;
 
 public class FsCrawlerDocumentServiceElasticsearchImpl implements FsCrawlerDocumentService {
 
-    private static final Logger logger = LogManager.getLogger(FsCrawlerDocumentServiceElasticsearchImpl.class);
+    private static final Logger logger = LogManager.getLogger();
 
     private final IElasticsearchClient client;
 
@@ -68,7 +68,7 @@ public class FsCrawlerDocumentServiceElasticsearchImpl implements FsCrawlerDocum
 
     @Override
     public void createSchema() throws Exception {
-        client.createIndices();
+        client.createIndexAndComponentTemplates();
     }
 
     @Override
@@ -95,7 +95,7 @@ public class FsCrawlerDocumentServiceElasticsearchImpl implements FsCrawlerDocum
     }
 
     @Override
-    public void refresh(String index) throws IOException, ElasticsearchClientException {
+    public void refresh(String index) throws ElasticsearchClientException {
         logger.debug("Refreshing {}", index);
         client.refresh(index);
     }

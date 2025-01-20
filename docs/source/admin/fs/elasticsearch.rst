@@ -14,6 +14,8 @@ Here is a list of Elasticsearch settings (under ``elasticsearch.`` prefix)`:
 +-----------------------------------+---------------------------+---------------------------------+
 | ``elasticsearch.index_folder``    | job name + ``_folder``    | `Index settings for folders`_   |
 +-----------------------------------+---------------------------+---------------------------------+
+| ``elasticsearch.push_templates``  | ``true``                  | :ref:`mappings`                 |
++-----------------------------------+---------------------------+---------------------------------+
 | ``elasticsearch.bulk_size``       | ``100``                   | `Bulk settings`_                |
 +-----------------------------------+---------------------------+---------------------------------+
 | ``elasticsearch.flush_interval``  | ``"5s"``                  | `Bulk settings`_                |
@@ -22,15 +24,21 @@ Here is a list of Elasticsearch settings (under ``elasticsearch.`` prefix)`:
 +-----------------------------------+---------------------------+---------------------------------+
 | ``elasticsearch.pipeline``        | ``null``                  | :ref:`ingest_node`              |
 +-----------------------------------+---------------------------+---------------------------------+
-| ``elasticsearch.nodes``           | ``http://127.0.0.1:9200`` | `Node settings`_                |
+| ``elasticsearch.semantic_search`` | ``true``                  | :ref:`semantic_search`          |
++-----------------------------------+---------------------------+---------------------------------+
+| ``elasticsearch.nodes``           | ``https://127.0.0.1:9200``| `Node settings`_                |
 +-----------------------------------+---------------------------+---------------------------------+
 | ``elasticsearch.path_prefix``     | ``null``                  | `Path prefix`_                  |
++-----------------------------------+---------------------------+---------------------------------+
+| ``elasticsearch.api_key``         | ``null``                  | `API Key`_                      |
 +-----------------------------------+---------------------------+---------------------------------+
 | ``elasticsearch.username``        | ``null``                  | :ref:`credentials`              |
 +-----------------------------------+---------------------------+---------------------------------+
 | ``elasticsearch.password``        | ``null``                  | :ref:`credentials`              |
 +-----------------------------------+---------------------------+---------------------------------+
-| ``elasticsearch.ssl_verification``| ``true``                  | :ref:`credentials`              |
+| ``elasticsearch.ssl_verification``| ``true``                  | :ref:`ssl`                      |
++-----------------------------------+---------------------------+---------------------------------+
+| ``elasticsearch.ca_certificate``  | ``null``                  | :ref:`ssl`                      |
 +-----------------------------------+---------------------------+---------------------------------+
 
 Index settings
@@ -40,8 +48,7 @@ Index settings for documents
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 By default, FSCrawler will index your data in an index which name is
-the same as the crawler name (``name`` property) plus ``_doc`` suffix,
-like ``test_doc``. You can change it by setting ``index`` field:
+the same as the crawler name (``name`` property). You can change it by setting ``index`` field:
 
 .. code:: yaml
 
@@ -67,304 +74,95 @@ the crawler name (``name`` property) plus ``_folder`` suffix, like
 Mappings
 ~~~~~~~~
 
-When FSCrawler needs to create the doc index, it applies some default
-settings and mappings which are read from
-``~/.fscrawler/_default/7/_settings.json``. You can read its content
-from `the
-source <https://github.com/dadoonet/fscrawler/blob/master/settings/src/main/resources/fr/pilato/elasticsearch/crawler/fs/_default/7/_settings.json>`__.
+.. versionadded:: 2.10
 
-Settings define an analyzer named ``fscrawler_path`` which uses a `path
-hierarchy
-tokenizer <https://www.elastic.co/guide/en/elasticsearch/reference/current/analysis-pathhierarchy-tokenizer.html>`__.
+FSCrawler defines the following `Component Templates <https://www.elastic.co/guide/en/elasticsearch/reference/current/index-templates.html>`__
+to define the index settings and mappings:
 
-FSCrawler applies as well a mapping automatically for the folders which can also be
-read from `the source <https://github.com/dadoonet/fscrawler/blob/master/settings/src/main/resources/fr/pilato/elasticsearch/crawler/fs/_default/7/_settings_folder.json>`__.
+- ``fscrawler_alias``: defines the alias ``fscrawler`` so you can search using this alias.
+- ``fscrawler_settings_shards``: defines the number of shards to use for the index.
+- ``fscrawler_settings_total_fields``: defines the maximum number of fields for the index.
+- ``fscrawler_mapping_attributes``: defines the mapping for the ``attributes`` field.
+- ``fscrawler_mapping_file``: defines the mapping for the ``file`` field.
+- ``fscrawler_mapping_path``: defines an define an analyzer named ``fscrawler_path`` which uses a
+  `path hierarchy tokenizer <https://www.elastic.co/guide/en/elasticsearch/reference/current/analysis-pathhierarchy-tokenizer.html>`__
+  and the mapping for the ``path`` field.
 
-You can also display the index mapping being used with Kibana:
+- ``fscrawler_mapping_attachment``: defines the mapping for the ``attachment`` field.
+- ``fscrawler_mapping_content_semantic``: defines the mapping for the ``content`` field when using semantic search.
+It also creates a ``semantic_text`` field named ``content_semantic``. Please read the :ref:`semantic_search` section.
+
+- ``fscrawler_mapping_content``: defines the mapping for the ``content`` field when semantic search is not available.
+- ``fscrawler_mapping_meta``: defines the mapping for the ``meta`` field.
+
+You can see the content of those templates by running:
 
 ::
 
-   GET docs/_mapping
-   GET docs_folder/_mapping
+   GET _component_template/fscrawler*
 
-Or fall back to the command line:
+Then, FSCrawler applies those templates to the indices being created.
 
-.. code:: sh
+You can stop FSCrawler creating/updating the index templates for you
+by setting ``push_templates`` to ``false``:
 
-   curl 'http://localhost:9200/docs/_mapping?pretty'
-   curl 'http://localhost:9200/docs_folder/_mapping?pretty'
+.. code:: yaml
 
-.. note::
+   name: "test"
+   elasticsearch:
+     push_templates: false
 
-    FSCrawler is actually applying default index settings depending on the
-    elasticsearch version it is connected to.
-    The default settings definitions are stored in ``~/.fscrawler/_default/_mappings``:
-
-    -  ``6/_settings.json``: for elasticsearch 6.x series document index settings
-    -  ``6/_settings_folder.json``: for elasticsearch 6.x series folder index settings
-    -  ``7/_settings.json``: for elasticsearch 7.x series document index settings
-    -  ``7/_settings_folder.json``: for elasticsearch 7.x series folder index settings
+If you want to know what are the component templates and index templates
+that will be created, you can get them from `the source <https://github.com/dadoonet/fscrawler/blob/master/elasticsearch-client/src/main/resources/fr/pilato/elasticsearch/crawler/fs/client/8>`__.
 
 Creating your own mapping (analyzers)
 """""""""""""""""""""""""""""""""""""
 
 If you want to define your own index settings and mapping to set
-analyzers for example, you can either create the index and push the
-mapping or define a ``~/.fscrawler/_default/7/_settings.json`` document
-which contains the index settings and mappings you wish **before
-starting the FSCrawler**.
+analyzers for example, you can update the needed component template
+**before starting the FSCrawler**.
 
 The following example uses a ``french`` analyzer to index the
-``content`` field.
+``content`` field and still allow using semantic search.
 
 .. code:: json
 
+    PUT _component_template/fscrawler_mapping_content_semantic
     {
-      "settings": {
-        "number_of_shards": 1,
-        "index.mapping.total_fields.limit": 2000,
-        "analysis": {
-          "analyzer": {
-            "fscrawler_path": {
-              "tokenizer": "fscrawler_path"
-            }
-          },
-          "tokenizer": {
-            "fscrawler_path": {
-              "type": "path_hierarchy"
-            }
-          }
-        }
-      },
-      "mappings": {
-        "_doc": {
-          "dynamic_templates": [
-            {
-              "raw_as_text": {
-                "path_match": "meta.raw.*",
-                "mapping": {
-                  "type": "text",
-                  "fields": {
-                    "keyword": {
-                      "type": "keyword",
-                      "ignore_above": 256
-                    }
-                  }
-                }
-              }
-            }
-          ],
+      "template": {
+        "mappings": {
           "properties": {
-            "attachment": {
-              "type": "binary",
-              "doc_values": false
-            },
-            "attributes": {
-              "properties": {
-                "group": {
-                  "type": "keyword"
-                },
-                "owner": {
-                  "type": "keyword"
-                }
-              }
-            },
             "content": {
               "type": "text",
-              "analyzer": "french"
+              "analyzer": "french",
+              "copy_to": "content_semantic"
             },
-            "file": {
-              "properties": {
-                "content_type": {
-                  "type": "keyword"
-                },
-                "filename": {
-                  "type": "keyword",
-                  "store": true
-                },
-                "extension": {
-                  "type": "keyword"
-                },
-                "filesize": {
-                  "type": "long"
-                },
-                "indexed_chars": {
-                  "type": "long"
-                },
-                "indexing_date": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "created": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "last_modified": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "last_accessed": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "checksum": {
-                  "type": "keyword"
-                },
-                "url": {
-                  "type": "keyword",
-                  "index": false
-                }
-              }
-            },
-            "meta": {
-              "properties": {
-                "author": {
-                  "type": "text"
-                },
-                "date": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "keywords": {
-                  "type": "text"
-                },
-                "title": {
-                  "type": "text"
-                },
-                "language": {
-                  "type": "keyword"
-                },
-                "format": {
-                  "type": "text"
-                },
-                "identifier": {
-                  "type": "text"
-                },
-                "contributor": {
-                  "type": "text"
-                },
-                "coverage": {
-                  "type": "text"
-                },
-                "modifier": {
-                  "type": "text"
-                },
-                "creator_tool": {
-                  "type": "keyword"
-                },
-                "publisher": {
-                  "type": "text"
-                },
-                "relation": {
-                  "type": "text"
-                },
-                "rights": {
-                  "type": "text"
-                },
-                "source": {
-                  "type": "text"
-                },
-                "type": {
-                  "type": "text"
-                },
-                "description": {
-                  "type": "text"
-                },
-                "created": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "print_date": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "metadata_date": {
-                  "type": "date",
-                  "format": "date_optional_time"
-                },
-                "latitude": {
-                  "type": "text"
-                },
-                "longitude": {
-                  "type": "text"
-                },
-                "altitude": {
-                  "type": "text"
-                },
-                "rating": {
-                  "type": "byte"
-                },
-                "comments": {
-                  "type": "text"
-                }
-              }
-            },
-            "path": {
-              "properties": {
-                "real": {
-                  "type": "keyword",
-                  "fields": {
-                    "tree": {
-                      "type": "text",
-                      "analyzer": "fscrawler_path",
-                      "fielddata": true
-                    },
-                    "fulltext": {
-                      "type": "text"
-                    }
-                  }
-                },
-                "root": {
-                  "type": "keyword"
-                },
-                "virtual": {
-                  "type": "keyword",
-                  "fields": {
-                    "tree": {
-                      "type": "text",
-                      "analyzer": "fscrawler_path",
-                      "fielddata": true
-                    },
-                    "fulltext": {
-                      "type": "text"
-                    }
-                  }
-                }
-              }
+            "content_semantic": {
+              "type": "semantic_text"
             }
           }
         }
       }
     }
 
-Note that if you want to push manually the mapping to elasticsearch you
-can use the classic REST calls:
+The following example uses a ``french`` analyzer to index the
+``content`` field.
 
-::
+.. code:: json
 
-   # Create index (don't forget to add the fscrawler_path analyzer)
-   PUT docs
-   {
-     // Same index settings as previously seen
-   }
-
-Define explicit mapping/settings per job
-""""""""""""""""""""""""""""""""""""""""
-
-Let’s say you created a job named ``job_name`` and you are sending
-documents against an elasticsearch cluster running version ``6.x``.
-
-If you create the following files, they will be picked up at job start
-time instead of the :ref:`default ones <mappings>`:
-
--  ``~/.fscrawler/{job_name}/_mappings/7/_settings.json``
--  ``~/.fscrawler/{job_name}/_mappings/7/_settings_folder.json``
-
-.. tip::
-    You can do the same for other elasticsearch versions with:
-
-    -  ``~/.fscrawler/{job_name}/_mappings/6/_settings.json`` for 6.x series
-    -  ``~/.fscrawler/{job_name}/_mappings/6/_settings_folder.json`` for 6.x series
+    PUT _component_template/fscrawler_mapping_content
+    {
+      "template": {
+        "mappings": {
+          "properties": {
+            "content": {
+              "type": "text",
+              "analyzer": "french"
+            }
+          }
+        }
+      }
+    }
 
 Replace existing mapping
 """"""""""""""""""""""""
@@ -377,6 +175,58 @@ mapping.
 You might to try `elasticsearch Reindex
 API <https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-reindex.html>`__
 though.
+
+.. _semantic_search:
+
+Semantic search
+"""""""""""""""
+
+.. versionadded:: 2.10
+
+FSCrawler can use `semantic search <https://www.elastic.co/guide/en/elasticsearch/reference/current/semantic-search.html>`__
+to improve the search results.
+
+.. note::
+
+    Semantic search is available starting from Elasticsearch 8.17.0 and requires a trial or enterprise license.
+
+Semantic search is enabled by default when an Elasticsearch 8.17.0 or above and a trial or enterprise license are
+detected. But you can disable it by setting ``semantic_search`` to ``false``:
+
+.. code:: yaml
+
+   name: "test"
+   elasticsearch:
+     semantic_search: false
+
+When activated, the ``content`` field is indexed as usual but a new field named ``content_semantic``
+is created and uses the `semantic_text <https://www.elastic.co/guide/en/elasticsearch/reference/current/semantic-text.html>`__
+field type. This field type is used to store the semantic information extracted from the content by using the defined
+inference API (defaults to `Elser model <https://www.elastic.co/guide/en/machine-learning/current/ml-nlp-elser.html>`__).
+
+You can change the model to use by changing the component template. For example, a recommended model when you have only
+english content is the Elastic `multilingual-e5-small <https://www.elastic.co/guide/en/machine-learning/current/ml-nlp-multilingual-e5-small.html>`__:
+
+.. code:: json
+
+    PUT _component_template/fscrawler_mapping_content_semantic
+    {
+      "template": {
+        "mappings": {
+          "properties": {
+            "content": {
+              "type": "text",
+              "copy_to": "content_semantic"
+            },
+            "content_semantic": {
+              "type": "semantic_text",
+              "inference_id": ".multilingual-e5-small-elasticsearch"
+            }
+          }
+        }
+      }
+    }
+
 
 Bulk settings
 ^^^^^^^^^^^^^
@@ -413,8 +263,6 @@ default settings using ``bulk_size``, ``byte_size`` and ``flush_interval``:
 
 Using Ingest Node Pipeline
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. versionadded:: 2.2
 
 If you are using an elasticsearch cluster running a 5.0 or superior
 version, you can use an Ingest Node pipeline to transform documents sent
@@ -453,8 +301,10 @@ Node settings
 ^^^^^^^^^^^^^
 
 FSCrawler is using elasticsearch REST layer to send data to your
-running cluster. By default, it connects to ``http://127.0.0.1:9200``
-which is the default when running a local node on your machine.
+running cluster. By default, it connects to ``https://127.0.0.1:9200``
+which is the default when running a local node on your machine. 
+Note that using ``https`` requires SSL Configuration set up.
+For more information, read  :ref:`ssl`.
 
 Of course, in production, you would probably change this and connect to
 a production cluster:
@@ -464,7 +314,7 @@ a production cluster:
    name: "test"
    elasticsearch:
      nodes:
-     - url: "http://mynode1.mycompany.com:9200"
+     - url: "https://mynode1.mycompany.com:9200"
 
 If you are using `Elasticsearch service by Elastic <https://www.elastic.co/cloud/elasticsearch-service>`_,
 you can just use the ``Cloud ID`` which is available in the Cloud Console and paste it:
@@ -490,27 +340,15 @@ You can define multiple nodes:
    name: "test"
    elasticsearch:
      nodes:
-     - url: "http://mynode1.mycompany.com:9200"
-     - url: "http://mynode2.mycompany.com:9200"
-     - url: "http://mynode3.mycompany.com:9200"
-
-.. note::
-    .. versionadded:: 2.2 you can use HTTPS instead of default HTTP.
-
-    .. code:: yaml
-
-       name: "test"
-       elasticsearch:
-         nodes:
-         - url: "https://CLUSTERID.eu-west-1.aws.found.io:9243"
-
-    For more information, read :ref:`ssl`.
+     - url: "https://mynode1.mycompany.com:9200"
+     - url: "https://mynode2.mycompany.com:9200"
+     - url: "https://mynode3.mycompany.com:9200"
 
 Path prefix
 ^^^^^^^^^^^
 
-.. versionadded:: 2.7 If your elasticsearch is running behind a proxy with url rewriting,
-    you might have to specify a path prefix. This can be done with ``path_prefix`` setting:
+If your elasticsearch is running behind a proxy with url rewriting,
+you might have to specify a path prefix. This can be done with ``path_prefix`` setting:
 
 .. code:: yaml
 
@@ -529,10 +367,52 @@ Path prefix
 Using Credentials (Security)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. versionadded:: 2.2
+If you have a secured cluster, you can use several methods to connect
+to it:
 
-If you secured your elasticsearch cluster, you can provide
-``username`` and ``password`` to FSCrawler:
+- `API Key <https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api-create-api-key.html>`__
+- `Basic Authentication <https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api-authenticate.html>`__ (not recommended / deprecated)
+
+API Key
+~~~~~~~
+
+.. versionadded:: 2.10
+
+Let's create an API Key named ``fscrawler``:
+
+.. code:: json
+
+    POST /_security/api_key
+    {
+      "name": "fscrawler"
+    }
+
+This gives something like:
+
+.. code:: json
+
+    {
+      "id": "VuaCfGcBCdbkQm-e5aOx",
+      "name": "fscrawler",
+      "expiration": 1544068612110,
+      "api_key": "ui2lp2axTNmsyakw9tvNnw",
+      "encoded": "VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
+    }
+
+Then you can use the encoded API Key in FSCrawler settings:
+
+.. code:: yaml
+
+   name: "test"
+   elasticsearch:
+     api_key: "VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
+
+Basic Authentication (deprecated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The best practice is to use `API Key`_. But if you have no other choice, you can still use Basic Authentication.
+
+You can provide the ``username`` and ``password`` to FSCrawler:
 
 .. code:: yaml
 
@@ -542,8 +422,7 @@ If you secured your elasticsearch cluster, you can provide
      password: "changeme"
 
 .. warning::
-    For the current version, the elasticsearch password is stored in
-    plain text in your job setting file.
+    Be aware that the elasticsearch password is stored in plain text in your job setting file.
 
     A better practice is to only set the username or pass it with
     ``--username elastic`` option when starting FSCrawler.
@@ -554,7 +433,11 @@ If you secured your elasticsearch cluster, you can provide
 
        22:46:42,528 INFO  [f.p.e.c.f.FsCrawler] Password for elastic:
 
-If you want to use another user than the default ``elastic``, you will need to give him some permissions:
+
+User permissions
+~~~~~~~~~~~~~~~~
+
+If you want to use another user than the default ``elastic`` (which is admin), you will need to give him some permissions:
 
 * ``cluster:monitor``
 * ``indices:fsc/all``
@@ -586,35 +469,68 @@ Then, you can assign this role to the user who will be defined within the ``user
 SSL Configuration
 ^^^^^^^^^^^^^^^^^
 
-In order to ingest documents to Elasticsearch over HTTPS based connection, you need to perform additional configuration
-steps:
+In order to ingest documents to Elasticsearch over HTTPS based connection, you obviously need to set the URL
+to ``https://your-server-address``. If your server is using a certificate that has been signed
+by a Certificate Authority, then you're good to go. For example, that's the case if you are running Elasticsearch
+from cloud.elastic.co.
 
-.. important::
+But if you are using a self signed certificate, which is the case in development mode, you need to either
+ignore the ssl check (not recommended) or provide the certificate to the Elasticsearch client.
 
-    Prerequisite: you need to have root CA chain certificate or Elasticsearch server certificate
-    in DER format. DER format files have a ``.cer`` extension. Certificate verification can be disabled by option ``ssl_verification: false``
-
-1. Logon to server (or client machine) where FSCrawler is running
-2. Run:
-
-.. code:: sh
-
-    keytool -import -alias <alias name> -keystore " <JAVA_HOME>\lib\security\cacerts" -file <Path of Elasticsearch Server certificate or Root certificate>
-
-It will prompt you for the password. Enter the certificate password like ``changeit``.
-
-3. Make changes to FSCrawler ``_settings.json`` file to connect to your Elasticsearch server over HTTPS:
+To bypass the SSL Certificate verification, you can use the ``ssl_verification`` option:
 
 .. code:: yaml
 
-    name: "test"
-    elasticsearch:
-      nodes:
-      - url: "https://localhost:9243"
+   name: "test"
+   elasticsearch:
+     api_key: "VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
+     ssl_verification: false
 
-.. tip::
+If you are running Elasticsearch from a Docker container, you can copy the self-signed certificate
+generated in ``/usr/share/elasticsearch/config/certs/http_ca.crt`` to your local machine:
 
-    If you can not find ``keytool``, it probably means that you did not add your ``JAVA_HOME/bin`` directory to your path.
+.. code:: sh
+
+    docker cp CONTAINER_NAME:/usr/share/elasticsearch/config/certs/http_ca.crt /path/to/certificate
+
+And then, you can specify this file in the ``elasticsearch.ca_certificate`` option:
+
+.. code:: yaml
+
+   name: "test"
+   elasticsearch:
+     api_key: "VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
+     ca_certificate: /path/to/certificate/http_ca.crt
+
+.. note::
+
+    You can also import your certificate into ``<JAVA_HOME>\lib\security\cacerts``.
+
+    For example, if you have a root CA chain certificate or Elasticsearch server certificate
+    in DER format (it's a binary format using a ``.cer`` extension), you need to:
+
+    1. Logon to server (or client machine) where FSCrawler is running
+    2. Run:
+
+    .. code:: sh
+
+        keytool -import -alias <alias name> -keystore "<JAVA_HOME>\lib\security\cacerts" -file <Path of Elasticsearch Server certificate or Root certificate>
+
+    It will prompt you for the password. Enter the certificate password like ``changeit``.
+
+    3. Make changes to FSCrawler ``_settings.json`` file to connect to your Elasticsearch server over HTTPS:
+
+    .. code:: yaml
+
+        name: "test"
+        elasticsearch:
+         api_key: "VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
+         nodes:
+         - url: "https://localhost:9243"
+
+    .. tip::
+
+        If you can not find ``keytool``, it probably means that you did not add your ``JAVA_HOME/bin`` directory to your path.
 
 .. _generated_fields:
 
@@ -628,82 +544,85 @@ FSCrawler may create the following fields depending on configuration and availab
 +============================+========================================+==============================================+=====================================================================+
 | ``content``                | Extracted content                      | ``"This is my text!"``                       |                                                                     |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
+| ``content_semantic``       | Semantic version of the extracted      | Semantic representation                      |                                                                     |
+|                            | content                                |                                              |                                                                     |
++----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
 | ``attachment``             | BASE64 encoded binary file             | BASE64 Encoded document                      |                                                                     |
 |                            |                                        |                                              |                                                                     |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.author``            | Author if any in                       | ``"David Pilato"``                           | `CREATOR <https://tika.apache.org/1.18/api/org/apache/tika/         |
+| ``meta.author``            | Author if any in                       | ``"David Pilato"``                           | `CREATOR <https://tika.apache.org/2.9.1/api/org/apache/tika/         |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#CREATOR>`__                        |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.title``             | Title if any in document metadata      | ``"My document title"``                      | `TITLE <https://tika.apache.org/1.18/api/org/apache/tika/           |
+| ``meta.title``             | Title if any in document metadata      | ``"My document title"``                      | `TITLE <https://tika.apache.org/2.9.1/api/org/apache/tika/           |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#TITLE>`__                          |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.date``              | Last modified date                     | ``"2013-04-04T15:21:35"``                    | `MODIFIED <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.date``              | Last modified date                     | ``"2013-04-04T15:21:35"``                    | `MODIFIED <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#MODIFIED>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.keywords``          | Keywords if any in document metadata   | ``["fs","elasticsearch"]``                   | `KEYWORDS <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.keywords``          | Keywords if any in document metadata   | ``["fs","elasticsearch"]``                   | `KEYWORDS <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#KEYWORDS>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.language``          | Language (can be detected)             | ``"fr"``                                     | `LANGUAGE <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.language``          | Language (can be detected)             | ``"fr"``                                     | `LANGUAGE <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#LANGUAGE>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.format``            | Format of the media                    | ``"application/pdf; version=1.6"``           | `FORMAT <https://tika.apache.org/1.18/api/org/apache/tika/          |
+| ``meta.format``            | Format of the media                    | ``"application/pdf; version=1.6"``           | `FORMAT <https://tika.apache.org/2.9.1/api/org/apache/tika/          |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#FORMAT>`__                         |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.identifier``        | URL/DOI/ISBN for example               | ``"FOOBAR"``                                 | `IDENTIFIER <https://tika.apache.org/1.18/api/org/apache/tika/      |
+| ``meta.identifier``        | URL/DOI/ISBN for example               | ``"FOOBAR"``                                 | `IDENTIFIER <https://tika.apache.org/2.9.1/api/org/apache/tika/      |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#IDENTIFIER>`__                     |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.contributor``       | Contributor                            | ``"foo bar"``                                | `CONTRIBUTOR <https://tika.apache.org/1.18/api/org/apache/tika/     |
+| ``meta.contributor``       | Contributor                            | ``"foo bar"``                                | `CONTRIBUTOR <https://tika.apache.org/2.9.1/api/org/apache/tika/     |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#CONTRIBUTOR>`__                    |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.coverage``          | Coverage                               | ``"FOOBAR"``                                 | `COVERAGE <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.coverage``          | Coverage                               | ``"FOOBAR"``                                 | `COVERAGE <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#COVERAGE>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.modifier``          | Last author                            | ``"David Pilato"``                           | `MODIFIER <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.modifier``          | Last author                            | ``"David Pilato"``                           | `MODIFIER <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#MODIFIER>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.creator_tool``      | Tool used to create the resource       | ``"HTML2PDF- TCPDF"``                        | `CREATOR_TOOL <https://tika.apache.org/1.18/api/org/apache/tika/    |
+| ``meta.creator_tool``      | Tool used to create the resource       | ``"HTML2PDF- TCPDF"``                        | `CREATOR_TOOL <https://tika.apache.org/2.9.1/api/org/apache/tika/    |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#CREATOR_TOOL>`__                   |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.publisher``         | Publisher: person, organisation,       | ``"elastic"``                                | `PUBLISHER <https://tika.apache.org/1.18/api/org/apache/tika/       |
+| ``meta.publisher``         | Publisher: person, organisation,       | ``"elastic"``                                | `PUBLISHER <https://tika.apache.org/2.9.1/api/org/apache/tika/       |
 |                            | service                                |                                              | metadata/TikaCoreProperties.html#PUBLISHER>`__                      |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.relation``          | Related resource                       | ``"FOOBAR"``                                 | `RELATION <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.relation``          | Related resource                       | ``"FOOBAR"``                                 | `RELATION <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#RELATION>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.rights``            | Information about rights               | ``"CC-BY-ND"``                               | `RIGHTS <https://tika.apache.org/1.18/api/org/apache/tika/          |
+| ``meta.rights``            | Information about rights               | ``"CC-BY-ND"``                               | `RIGHTS <https://tika.apache.org/2.9.1/api/org/apache/tika/          |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#RIGHTS>`__                         |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.source``            | Source for the current document        | ``"FOOBAR"``                                 | `SOURCE <https://tika.apache.org/1.18/api/org/apache/tika/          |
+| ``meta.source``            | Source for the current document        | ``"FOOBAR"``                                 | `SOURCE <https://tika.apache.org/2.9.1/api/org/apache/tika/          |
 |                            | (derivated)                            |                                              | metadata/TikaCoreProperties.html#SOURCE>`__                         |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.type``              | Nature or genre of the content         | ``"Image"``                                  | `TYPE <https://tika.apache.org/1.18/api/org/apache/tika/            |
+| ``meta.type``              | Nature or genre of the content         | ``"Image"``                                  | `TYPE <https://tika.apache.org/2.9.1/api/org/apache/tika/            |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#TYPE>`__                           |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.description``       | An account of the content              | ``"This is a description"``                  | `DESCRIPTION <https://tika.apache.org/1.18/api/org/apache/tika/     |
+| ``meta.description``       | An account of the content              | ``"This is a description"``                  | `DESCRIPTION <https://tika.apache.org/2.9.1/api/org/apache/tika/     |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#DESCRIPTION>`__                    |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.created``           | Date of creation                       | ``"2013-04-04T15:21:35"``                    | `CREATED <https://tika.apache.org/1.18/api/org/apache/tika/         |
+| ``meta.created``           | Date of creation                       | ``"2013-04-04T15:21:35"``                    | `CREATED <https://tika.apache.org/2.9.1/api/org/apache/tika/         |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#CREATED>`__                        |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.print_date``        | When was the doc last printed?         | ``"2013-04-04T15:21:35"``                    | `PRINT_DATE <https://tika.apache.org/1.18/api/org/apache/tika/      |
+| ``meta.print_date``        | When was the doc last printed?         | ``"2013-04-04T15:21:35"``                    | `PRINT_DATE <https://tika.apache.org/2.9.1/api/org/apache/tika/      |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#PRINT_DATE>`__                     |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.metadata_date``     | Last modification of metadata          | ``"2013-04-04T15:21:35"``                    | `METADATA_DATE <https://tika.apache.org/1.18/api/org/apache/tika/   |
+| ``meta.metadata_date``     | Last modification of metadata          | ``"2013-04-04T15:21:35"``                    | `METADATA_DATE <https://tika.apache.org/2.9.1/api/org/apache/tika/   |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#METADATA_DATE>`__                  |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.latitude``          | The WGS84 Latitude of the Point        | ``"N 48° 51' 45.81''"``                      | `LATITUDE <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.latitude``          | The WGS84 Latitude of the Point        | ``"N 48° 51' 45.81''"``                      | `LATITUDE <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#LATITUDE>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.longitude``         | The WGS84 Longitude of the Point       | ``"E 2° 17'15.331''"``                       | `LONGITUDE <https://tika.apache.org/1.18/api/org/apache/tika/       |
+| ``meta.longitude``         | The WGS84 Longitude of the Point       | ``"E 2° 17'15.331''"``                       | `LONGITUDE <https://tika.apache.org/2.9.1/api/org/apache/tika/       |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#LONGITUDE>`__                      |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.altitude``          | The WGS84 Altitude of the Point        | ``""``                                       | `ALTITUDE <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.altitude``          | The WGS84 Altitude of the Point        | ``""``                                       | `ALTITUDE <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#ALTITUDE>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.rating``            | A user-assigned rating -1, [0..5]      | ``0``                                        | `RATING <https://tika.apache.org/1.18/api/org/apache/tika/          |
+| ``meta.rating``            | A user-assigned rating -1, [0..5]      | ``0``                                        | `RATING <https://tika.apache.org/2.9.1/api/org/apache/tika/          |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#RATING>`__                         |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
-| ``meta.comments``          | Comments                               | ``"Comments"``                               | `COMMENTS <https://tika.apache.org/1.18/api/org/apache/tika/        |
+| ``meta.comments``          | Comments                               | ``"Comments"``                               | `COMMENTS <https://tika.apache.org/2.9.1/api/org/apache/tika/        |
 |                            |                                        |                                              | metadata/TikaCoreProperties.html#COMMENTS>`__                       |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
 | ``meta.raw``               | An object with all raw metadata        | ``"meta.raw.channels": "2"``                 |                                                                     |
@@ -745,7 +664,7 @@ FSCrawler may create the following fields depending on configuration and availab
 | ``external``               | Additional tags                        | ``{ "tenantId": 22, "projectId": 33 }``      |                                                                     |
 +----------------------------+----------------------------------------+----------------------------------------------+---------------------------------------------------------------------+
 
-For more information about meta data, please read the `TikaCoreProperties <https://tika.apache.org/1.18/api/org/apache/tika/metadata/TikaCoreProperties.html>`__.
+For more information about meta data, please read the `TikaCoreProperties <https://tika.apache.org/2.9.1/api/org/apache/tika/metadata/TikaCoreProperties.html>`__.
 
 Here is a typical JSON document generated by the crawler:
 

@@ -19,11 +19,14 @@
 
 package fr.pilato.elasticsearch.crawler.fs.cli;
 
+import com.fasterxml.jackson.core.JsonParseException;
 import fr.pilato.elasticsearch.crawler.fs.beans.FsJob;
 import fr.pilato.elasticsearch.crawler.fs.beans.FsJobFileHandler;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsSettings;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsSettingsFileHandler;
 import fr.pilato.elasticsearch.crawler.fs.test.framework.AbstractFSCrawlerTestCase;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -33,6 +36,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static fr.pilato.elasticsearch.crawler.fs.framework.FsCrawlerUtil.copyDefaultResources;
+import static fr.pilato.elasticsearch.crawler.fs.settings.FsSettingsFileHandler.SETTINGS_YAML;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 
@@ -40,7 +44,7 @@ import static org.hamcrest.Matchers.is;
  * We want to test FSCrawler main app
  */
 public class FsCrawlerCliTest extends AbstractFSCrawlerTestCase {
-
+    private static final Logger logger = LogManager.getLogger();
     private static Path metadataDir;
 
     @BeforeClass
@@ -51,7 +55,7 @@ public class FsCrawlerCliTest extends AbstractFSCrawlerTestCase {
             Files.createDirectory(metadataDir);
         }
         copyDefaultResources(metadataDir);
-        staticLogger.debug("  --> Test metadata dir ready in [{}]", metadataDir);
+        logger.debug("  --> Test metadata dir ready in [{}]", metadataDir);
     }
 
     @AfterClass
@@ -60,14 +64,14 @@ public class FsCrawlerCliTest extends AbstractFSCrawlerTestCase {
     }
 
     private static void printLs(Path dir) throws IOException {
-        staticLogger.debug("ls -l {}", dir);
+        logger.debug("ls -l {}", dir);
         Files.list(dir).forEach(path -> {
             if (Files.isDirectory(path)) {
                 try {
                     printLs(path);
                 } catch (IOException ignored) { }
             } else {
-                staticLogger.debug("{}", path);
+                logger.debug("{}", path);
             }
         });
     }
@@ -94,5 +98,22 @@ public class FsCrawlerCliTest extends AbstractFSCrawlerTestCase {
         FsCrawlerCli.main(args);
 
         assertThat(Files.exists(jobDir.resolve(FsJobFileHandler.FILENAME)), is(false));
+    }
+
+    @Test(expected = JsonParseException.class)
+    public void testWithWrongSettingsFile() throws Exception {
+        String jobName = "fscrawler_wrong_settings";
+
+        Path jobDir = metadataDir.resolve(jobName);
+        Files.createDirectories(jobDir);
+        Files.writeString(jobDir.resolve(SETTINGS_YAML),
+                "name: \"test\"\n" +
+                "fs:\n" +
+                "  url: \"/path/to/docs\"\n" +
+                // Wrong indentation
+                " follow_symlink: false\n");
+
+        String[] args = { "--config_dir", metadataDir.toString(), "--loop", "1", jobName };
+        FsCrawlerCli.main(args);
     }
 }

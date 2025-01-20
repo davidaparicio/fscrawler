@@ -36,6 +36,7 @@ import fr.pilato.elasticsearch.crawler.fs.settings.FsSettings;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsSettingsFileHandler;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsSettingsParser;
 import fr.pilato.elasticsearch.crawler.fs.settings.Server.PROTOCOL;
+import fr.pilato.elasticsearch.crawler.plugins.FsCrawlerPluginsManager;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
@@ -65,7 +66,8 @@ public class FsCrawlerCli {
 
     private static final long CLOSE_POLLING_WAIT_MS = 100;
 
-    private static final Logger logger = LogManager.getLogger(FsCrawlerCli.class);
+    private static final Logger logger = LogManager.getLogger();
+    private static FsCrawlerPluginsManager pluginsManager;
 
     @SuppressWarnings("CanBeFinal")
     public static class FsCrawlerCommand {
@@ -75,7 +77,11 @@ public class FsCrawlerCli {
         @Parameter(names = "--config_dir", description = "Config directory. Default to ~/.fscrawler")
         String configDir = null;
 
-        @Parameter(names = "--username", description = "Elasticsearch username when running with security.")
+        @Parameter(names = "--api_key", description = "Elasticsearch api key. See https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api-create-api-key.html")
+        String apiKey = null;
+
+        @Parameter(names = "--username", description = "Elasticsearch username. (Deprecated - use --api_key or --access_token instead)")
+        @Deprecated
         String username = null;
 
         @Parameter(names = "--loop", description = "Number of scan loop before exiting.")
@@ -91,10 +97,12 @@ public class FsCrawlerCli {
         @Parameter(names = "--upgrade", description = "Upgrade elasticsearch indices from one old version to the last version.")
         boolean upgrade = false;
 
-        @Parameter(names = "--debug", description = "Debug mode")
+        @Deprecated
+        @Parameter(names = "--debug", description = "Debug mode (Deprecated - use FS_JAVA_OPTS=\"-DLOG_LEVEL=debug\" instead)")
         boolean debug = false;
 
-        @Parameter(names = "--trace", description = "Trace mode")
+        @Deprecated
+        @Parameter(names = "--trace", description = "Trace mode (Deprecated - use FS_JAVA_OPTS=\"-DLOG_LEVEL=trace\" instead)")
         boolean trace = false;
 
         @Parameter(names = "--silent", description = "Silent mode")
@@ -109,11 +117,24 @@ public class FsCrawlerCli {
         FsCrawlerCommand command = commandParser(args);
 
         if (command != null) {
+            if (command.debug) {
+                // Deprecated command line option
+                logger.warn("--debug option has been deprecated. Use FS_JAVA_OPTS=\"-DLOG_LEVEL=debug\" instead.");
+            }
+            if (command.trace) {
+                // Deprecated command line option
+                logger.warn("--trace option has been deprecated. Use FS_JAVA_OPTS=\"-DLOG_LEVEL=trace\" instead.");
+            }
+
             // We change the log level if needed
             changeLoggerContext(command);
 
             // Display the welcome banner
             banner();
+
+            // Load all plugins
+            pluginsManager = new FsCrawlerPluginsManager();
+            pluginsManager.loadPlugins();
 
             // We can now launch the crawler
             runner(command);
@@ -207,10 +228,11 @@ public class FsCrawlerCli {
     /**
      * Modify existing settings with correct default values when not set.
      *
-     * @param fsSettings    the settings to modify
-     * @param usernameCli   the username coming from the CLI if any
+     * @param fsSettings        the settings to modify
+     * @param usernameCli       the username coming from the CLI if any (deprecated)
+     * @param apiKeyCli         the api key coming from the CLI if any
      */
-    static void modifySettings(FsSettings fsSettings, String usernameCli) {
+    static void modifySettings(FsSettings fsSettings, String usernameCli, String apiKeyCli) {
         // Check default settings
         if (fsSettings.getFs() == null) {
             fsSettings.setFs(Fs.DEFAULT);
@@ -233,7 +255,13 @@ public class FsCrawlerCli {
 
         // Overwrite settings with command line values
         if (fsSettings.getElasticsearch().getUsername() == null && usernameCli != null) {
+            logger.warn("You are using a deprecated way to set the username. Please use --api_key API_KEY instead.");
             fsSettings.getElasticsearch().setUsername(usernameCli);
+        }
+
+        // Overwrite settings with command line values
+        if (fsSettings.getElasticsearch().getApiKey() == null && apiKeyCli != null) {
+            fsSettings.getElasticsearch().setApiKey(apiKeyCli);
         }
     }
 
@@ -332,7 +360,12 @@ public class FsCrawlerCli {
         }
 
         logger.debug("Starting job [{}]...", jobName);
-        fsSettings = loadSettings(configDir, jobName);
+        try {
+            fsSettings = loadSettings(configDir, jobName);
+        } catch (Exception e) {
+            logger.fatal("Cannot parse the configuration file: {}", e.getMessage());
+            throw e;
+        }
 
         if (fsSettings == null) {
             logger.debug("job [{}] does not exist.", jobName);
@@ -346,7 +379,7 @@ public class FsCrawlerCli {
             return;
         }
 
-        modifySettings(fsSettings, command.username);
+        modifySettings(fsSettings, command.username, command.apiKey);
         if (fsSettings.getElasticsearch().getUsername() != null && fsSettings.getElasticsearch().getPassword() == null && scanner != null) {
             FSCrawlerLogger.console("Password for {}:", fsSettings.getElasticsearch().getUsername());
             String password = scanner.next();
@@ -361,21 +394,10 @@ public class FsCrawlerCli {
             return;
         }
 
-        // We add a special case here in case someone tries to use workplace search
-        if (fsSettings.getWorkplaceSearch() != null) {
-            logger.info("Workplace Search integration is an experimental feature. " +
-                    "As is it is not fully implemented and settings might change in the future.");
-            if (command.loop == -1 || command.loop > 1) {
-                logger.warn("Workplace Search integration does not support yet watching a directory. " +
-                                "It will be able to run only once and exit. We manually force from --loop {} to --loop 1. " +
-                                "If you want to remove this message next time, please start FSCrawler with --loop 1",
-                        command.loop);
-                command.loop = 1;
-            }
-        }
+        pluginsManager.startPlugins();
 
         try (FsCrawlerImpl fsCrawler = new FsCrawlerImpl(configDir, fsSettings, command.loop, command.rest)) {
-            Runtime.getRuntime().addShutdownHook(new FSCrawlerShutdownHook(fsCrawler));
+            Runtime.getRuntime().addShutdownHook(new FSCrawlerShutdownHook(fsCrawler, pluginsManager));
             // Let see if we want to upgrade an existing cluster to the latest version
             if (command.upgrade) {
                 logger.info("Upgrading job [{}]. No rule implemented. Skipping.", jobName);
@@ -388,7 +410,7 @@ public class FsCrawlerCli {
 
                 // Start the REST Server if needed
                 if (command.rest) {
-                    RestServer.start(fsSettings, fsCrawler.getManagementService(), fsCrawler.getDocumentService());
+                    RestServer.start(fsSettings, fsCrawler.getManagementService(), fsCrawler.getDocumentService(), pluginsManager);
                 }
 
                 // We just have to wait until the process is stopped

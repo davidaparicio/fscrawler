@@ -23,7 +23,6 @@ package fr.pilato.elasticsearch.crawler.fs.client;
 import fr.pilato.elasticsearch.crawler.fs.beans.Doc;
 
 import java.io.Closeable;
-import java.io.IOException;
 import java.util.List;
 
 /**
@@ -54,6 +53,11 @@ public interface IElasticsearchClient extends Closeable {
     String getVersion() throws ElasticsearchClientException;
 
     /**
+     * Get license about the cluster it's connected to
+     */
+    String getLicense() throws ElasticsearchClientException;
+
+    /**
      * Get the major version about the node it's connected to
      */
     int getMajorVersion();
@@ -63,8 +67,26 @@ public interface IElasticsearchClient extends Closeable {
      * @param index index name
      * @param ignoreExistingIndex don't fail if the index already exists
      * @param indexSettings index settings if any
+     * @deprecated use index templates instead
      */
+    @Deprecated
     void createIndex(String index, boolean ignoreExistingIndex, String indexSettings) throws ElasticsearchClientException;
+
+    /**
+     * Create or update a component template
+     * @param name  component template name
+     * @param json  template definition
+     * @throws ElasticsearchClientException in case of error
+     */
+    void pushComponentTemplate(String name, String json) throws ElasticsearchClientException;
+
+    /**
+     * Create or update an index template
+     * @param name  index template name
+     * @param json  template definition
+     * @throws ElasticsearchClientException in case of error
+     */
+    void pushIndexTemplate(String name, String json) throws ElasticsearchClientException;
 
     /**
      * Check if an index exists
@@ -134,12 +156,10 @@ public interface IElasticsearchClient extends Closeable {
     void deleteSingle(String index, String id) throws ElasticsearchClientException;
 
     /**
-     * Create all needed indices
+     * Create all needed component and index templates
      * @throws Exception in case of error
-     * @deprecated replace with an index template
      */
-    @Deprecated
-    void createIndices() throws Exception;
+    void createIndexAndComponentTemplates() throws Exception;
 
     /**
      * Run a search
@@ -193,4 +213,17 @@ public interface IElasticsearchClient extends Closeable {
      * @return  the outcome
      */
     String bulk(String ndjson) throws ElasticsearchClientException;
+
+    /**
+     * Generate an API key (for tests purposes only)
+     * @param keyName   the name of the key
+     * @return  the generated API key BASE64 encoded of key:value
+     */
+    String generateApiKey(String keyName) throws ElasticsearchClientException;
+
+    /**
+     * Check if the client supports semantic search
+     * @return true if semantic is supported
+     */
+    boolean isSemanticSupported();
 }

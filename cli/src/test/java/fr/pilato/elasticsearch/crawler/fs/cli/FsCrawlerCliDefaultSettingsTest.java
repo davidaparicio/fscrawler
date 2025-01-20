@@ -23,6 +23,8 @@ import fr.pilato.elasticsearch.crawler.fs.settings.FsSettings;
 import fr.pilato.elasticsearch.crawler.fs.settings.FsSettingsFileHandler;
 import fr.pilato.elasticsearch.crawler.fs.settings.Server;
 import fr.pilato.elasticsearch.crawler.fs.test.framework.AbstractFSCrawlerTestCase;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -41,7 +43,7 @@ import static org.hamcrest.Matchers.*;
  * We want to test FSCrawler main app
  */
 public class FsCrawlerCliDefaultSettingsTest extends AbstractFSCrawlerTestCase {
-
+    private static final Logger logger = LogManager.getLogger();
     private static Path metadataDir;
 
     @BeforeClass
@@ -52,7 +54,7 @@ public class FsCrawlerCliDefaultSettingsTest extends AbstractFSCrawlerTestCase {
             Files.createDirectory(metadataDir);
         }
         copyDefaultResources(metadataDir);
-        staticLogger.debug("  --> Test metadata dir ready in [{}]", metadataDir);
+        logger.debug("  --> Test metadata dir ready in [{}]", metadataDir);
     }
 
     @AfterClass
@@ -61,14 +63,14 @@ public class FsCrawlerCliDefaultSettingsTest extends AbstractFSCrawlerTestCase {
     }
 
     private static void printLs(Path dir) throws IOException {
-        staticLogger.debug("ls -l {}", dir);
+        logger.debug("ls -l {}", dir);
         Files.list(dir).forEach(path -> {
             if (Files.isDirectory(path)) {
                 try {
                     printLs(path);
                 } catch (IOException ignored) { }
             } else {
-                staticLogger.debug("{}", path);
+                logger.debug("{}", path);
             }
         });
     }
@@ -83,14 +85,15 @@ public class FsCrawlerCliDefaultSettingsTest extends AbstractFSCrawlerTestCase {
         FsSettings settings = fsSettingsFileHandler.read("modify_settings_no_username");
         assertThat(settings.getFs(), nullValue());
         assertThat(settings.getElasticsearch(), nullValue());
-        modifySettings(settings, null);
+        modifySettings(settings, null, null);
         assertThat(settings.getFs(), notNullValue());
         assertThat(settings.getElasticsearch(), notNullValue());
         assertThat(settings.getElasticsearch().getUsername(), nullValue());
+        assertThat(settings.getElasticsearch().getApiKey(), nullValue());
     }
 
     @Test
-    public void testModifySettingsWithUsername() throws IOException {
+    public void testModifySettingsWithUsernameDeprecated() throws IOException {
         FsSettingsFileHandler fsSettingsFileHandler = new FsSettingsFileHandler(metadataDir);
         Path jobDir = metadataDir.resolve("modify_settings_with_username");
         Files.createDirectories(jobDir);
@@ -99,10 +102,28 @@ public class FsCrawlerCliDefaultSettingsTest extends AbstractFSCrawlerTestCase {
         FsSettings settings = fsSettingsFileHandler.read("modify_settings_with_username");
         assertThat(settings.getFs(), nullValue());
         assertThat(settings.getElasticsearch(), nullValue());
-        modifySettings(settings, "elastic");
+        modifySettings(settings, "elastic", null);
         assertThat(settings.getFs(), notNullValue());
         assertThat(settings.getElasticsearch(), notNullValue());
         assertThat(settings.getElasticsearch().getUsername(), is("elastic"));
+        assertThat(settings.getElasticsearch().getApiKey(), nullValue());
+    }
+
+    @Test
+    public void testModifySettingsWithApiKey() throws IOException {
+        FsSettingsFileHandler fsSettingsFileHandler = new FsSettingsFileHandler(metadataDir);
+        Path jobDir = metadataDir.resolve("modify_settings_with_username");
+        Files.createDirectories(jobDir);
+
+        Files.writeString(jobDir.resolve(SETTINGS_YAML), "name: \"modify_settings_with_username\"");
+        FsSettings settings = fsSettingsFileHandler.read("modify_settings_with_username");
+        assertThat(settings.getFs(), nullValue());
+        assertThat(settings.getElasticsearch(), nullValue());
+        modifySettings(settings, null, "my_api_key_base64_encoded");
+        assertThat(settings.getFs(), notNullValue());
+        assertThat(settings.getElasticsearch(), notNullValue());
+        assertThat(settings.getElasticsearch().getUsername(), nullValue());
+        assertThat(settings.getElasticsearch().getApiKey(), is("my_api_key_base64_encoded"));
     }
 
     @Test
@@ -122,10 +143,11 @@ public class FsCrawlerCliDefaultSettingsTest extends AbstractFSCrawlerTestCase {
         assertThat(settings.getServer(), notNullValue());
         assertThat(settings.getServer().getPort(), is(Server.PROTOCOL.SSH_PORT));
         assertThat(settings.getServer().getUsername(), nullValue());
-        modifySettings(settings, "elastic");
+        modifySettings(settings, null, "my_api_key_base64_encoded");
         assertThat(settings.getFs(), notNullValue());
         assertThat(settings.getElasticsearch(), notNullValue());
-        assertThat(settings.getElasticsearch().getUsername(), is("elastic"));
+        assertThat(settings.getElasticsearch().getUsername(), nullValue());
+        assertThat(settings.getElasticsearch().getApiKey(), is("my_api_key_base64_encoded"));
         assertThat(settings.getServer().getPort(), is(Server.PROTOCOL.FTP_PORT));
         assertThat(settings.getServer().getUsername(), is("anonymous"));
     }
@@ -147,10 +169,11 @@ public class FsCrawlerCliDefaultSettingsTest extends AbstractFSCrawlerTestCase {
         assertThat(settings.getServer(), notNullValue());
         assertThat(settings.getServer().getPort(), is(Server.PROTOCOL.SSH_PORT));
         assertThat(settings.getServer().getUsername(), nullValue());
-        modifySettings(settings, "elastic");
+        modifySettings(settings, null, "my_api_key_base64_encoded");
         assertThat(settings.getFs(), notNullValue());
         assertThat(settings.getElasticsearch(), notNullValue());
-        assertThat(settings.getElasticsearch().getUsername(), is("elastic"));
+        assertThat(settings.getElasticsearch().getUsername(), nullValue());
+        assertThat(settings.getElasticsearch().getApiKey(), is("my_api_key_base64_encoded"));
         assertThat(settings.getServer().getPort(), is(Server.PROTOCOL.SSH_PORT));
         assertThat(settings.getServer().getUsername(), nullValue());
     }

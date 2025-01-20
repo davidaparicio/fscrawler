@@ -19,7 +19,6 @@
 
 package fr.pilato.elasticsearch.crawler.fs.test.integration.elasticsearch;
 
-import com.google.common.base.Charsets;
 import fr.pilato.elasticsearch.crawler.fs.client.ESSearchHit;
 import fr.pilato.elasticsearch.crawler.fs.client.ESSearchRequest;
 import fr.pilato.elasticsearch.crawler.fs.client.ESSearchResponse;
@@ -28,9 +27,12 @@ import fr.pilato.elasticsearch.crawler.fs.client.ElasticsearchClientException;
 import fr.pilato.elasticsearch.crawler.fs.settings.Fs;
 import fr.pilato.elasticsearch.crawler.fs.test.integration.AbstractFsCrawlerITCase;
 import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -45,6 +47,7 @@ import static org.junit.Assert.fail;
  * Test moving/removing/adding files
  */
 public class FsCrawlerTestRemoveDeletedIT extends AbstractFsCrawlerITCase {
+    private static final Logger logger = LogManager.getLogger();
 
     @Test
     public void test_remove_deleted_enabled() throws Exception {
@@ -123,6 +126,10 @@ public class FsCrawlerTestRemoveDeletedIT extends AbstractFsCrawlerITCase {
         // We create a copy of a file
         Files.move(currentTestResourceDir.resolve("roottxtfile.txt"),
                 currentTestResourceDir.resolve("renamed_roottxtfile.txt"));
+        // We need to "touch" the file we just moved otherwise it won't be seen as a new file
+        // This might depend on the OS where the code is running though
+        // Or there's a timing issue...
+        Files.setLastModifiedTime(currentTestResourceDir.resolve("renamed_roottxtfile.txt"), FileTime.from(Instant.now()));
 
         // We expect to have one file only with a new name
         countTestHelper(new ESSearchRequest().withIndex(getCrawlerName()).withESQuery(new ESTermQuery("file.filename", "renamed_roottxtfile.txt")), 1L, currentTestResourceDir);
@@ -177,7 +184,7 @@ public class FsCrawlerTestRemoveDeletedIT extends AbstractFsCrawlerITCase {
         }
 
         Path file = Files.createFile(tmpDir.resolve(filename));
-        Files.writeString(file, "Hello world", Charsets.UTF_8);
+        Files.writeString(file, "Hello world", StandardCharsets.UTF_8);
 
         // We should have 1 doc first
         countTestHelper(new ESSearchRequest().withIndex(getCrawlerName()), 1L, null);
